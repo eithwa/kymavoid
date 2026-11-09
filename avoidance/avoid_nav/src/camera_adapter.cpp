@@ -37,7 +37,11 @@ public:
     pnh.param("strut_mask_half_deg", strut_half_deg_, 2.0);
     pnh.param("frame_id", frame_, std::string("base_link"));
     pnh.param("latency", latency_, 0.03);
+    // black_item reports the first marked pixel, so on average half a pixel too far: undo that
+    pnh.param("quantization_correction_px", quant_px_, 0.5);
     inner_range_ = omniDistanceCm(inner, cam_high, outer) / 100.0;
+    cam_high_ = cam_high;
+    outer_ = outer;
     n_ = 360 / step_deg_;
     masked_.assign(n_, false);
     for (int i = 0; i < n_; ++i)
@@ -81,9 +85,13 @@ private:
         s.ranges[i] = std::numeric_limits<float>::infinity();
       else
       {
-        s.ranges[i] = v / 100.0f;
-        if (obstacles && s.ranges[i] <= inner_range_ + 0.01)
+        const bool clamped = v / 100.0 <= inner_range_ + 0.01;
+        if (obstacles && clamped)
           s.intensities[i] = 1.0f;                                    // clamped at the inner ring
+        double cm = v;
+        if (quant_px_ > 0 && !clamped)
+          cm = omniDistanceCm(omniPixel(v, cam_high_, outer_) - quant_px_, cam_high_, outer_);
+        s.ranges[i] = cm / 100.0f;
       }
     }
     return s;
@@ -93,7 +101,7 @@ private:
   void onRed(const std_msgs::Int32MultiArray& m) { bound_pub_.publish(convert(m, false)); }
 
   int step_deg_ = 3, dir_ = 1, n_ = 120;
-  double strut_half_deg_ = 2.0, latency_ = 0.03, inner_range_ = 0.32;
+  double strut_half_deg_ = 2.0, latency_ = 0.03, inner_range_ = 0.32, quant_px_ = 0.5, cam_high_ = 654, outer_ = 229;
   std::string frame_;
   std::vector<bool> masked_;
   ros::Publisher scan_pub_, bound_pub_;

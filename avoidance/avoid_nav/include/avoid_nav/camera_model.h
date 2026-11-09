@@ -14,4 +14,16 @@ inline double omniDistanceCm(double pixel, double camera_high_mm, double outer_p
   const double d = -camera_high_mm * (b * b - c * c) * std::cos(r) / ((b * b + c * c) * std::sin(r) - 2 * b * c) * 0.1;
   return (d < 0 || d > 999) ? 999.0 : d;
 }
+
+// Inverse of omniDistanceCm (bisection; the model is monotonic in [inner, ~160 px]).
+inline double omniPixel(double distance_cm, double camera_high_mm, double outer_px)
+{
+  double lo = 0.0, hi = 200.0;
+  for (int i = 0; i < 50; ++i)
+  {
+    const double mid = 0.5 * (lo + hi);
+    (omniDistanceCm(mid, camera_high_mm, outer_px) < distance_cm ? lo : hi) = mid;
+  }
+  return 0.5 * (lo + hi);
+}
 }  // namespace avoid_nav
