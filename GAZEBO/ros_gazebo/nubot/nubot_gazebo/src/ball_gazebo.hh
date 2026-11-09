@@ -2,7 +2,9 @@
 #define BALL_GAZEBO_HH
 
 #include <boost/bind.hpp>
-#include <gazebo/gazebo.hh>             // the core gazebo header files, including gazebo/math/gzmath.hh
+#include <gazebo/gazebo.hh>             // the core gazebo header files
+#include <ignition/math/Vector3.hh>     // Gazebo >= 9 removed gazebo::math
+#include <ignition/math/Pose3.hh>
 #include <gazebo/physics/physics.hh>
 #include <gazebo/common/common.hh>
 // #include <gazebo/transport/TransportTypes.hh>

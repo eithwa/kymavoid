@@ -2,7 +2,13 @@
 #define NUBOT_GAZEBO_HH
 
 #include <boost/bind.hpp>
-#include <gazebo/gazebo.hh>             // the core gazebo header files, including gazebo/math/gzmath.hh
+#include <gazebo/gazebo.hh>             // the core gazebo header files
+#include <ignition/math/Vector3.hh>     // Gazebo >= 9 removed gazebo::math; use ignition::math
+#include <ignition/math/Quaternion.hh>
+#include <ignition/math/Pose3.hh>
+#include <ignition/math/Matrix3.hh>
+#include <ignition/math/Rand.hh>
+#include <ignition/math/Helpers.hh>
 #include <gazebo/physics/physics.hh>
 #include <gazebo/common/common.hh>
 // #include <gazebo/transport/TransportTypes.hh>
@@ -49,13 +55,13 @@ enum nubot_substate
 namespace gazebo{
    struct Pose
    {
-       math::Vector3    position;
-       math::Quaternion orient;
+       ignition::math::Vector3d    position;
+       ignition::math::Quaterniond orient;
    };
    struct Twist
    {
-       math::Vector3    linear;
-       math::Vector3    angular;
+       ignition::math::Vector3d    linear;
+       ignition::math::Vector3d    angular;
    };
 
    struct model_state
@@ -107,11 +113,10 @@ namespace gazebo{
         //common::Time                  receive_sim_time_;
         std_msgs::Float64MultiArray   debug_msgs_;
 
-        math::Vector3               desired_rot_vector_;
-        math::Vector3               desired_trans_vector_;
-        math::Vector3               nubot_ball_vec_;
-        math::Vector3               kick_vector_world_;
-        math::Rand                  rand_;
+        ignition::math::Vector3d    desired_rot_vector_;
+        ignition::math::Vector3d    desired_trans_vector_;
+        ignition::math::Vector3d    nubot_ball_vec_;
+        ignition::math::Vector3d    kick_vector_world_;
         std::string                 robot_namespace_;   // robot namespace. Not used yet.
         std::string                 model_name_;
         std::string                 ball_name_;
@@ -189,7 +194,7 @@ namespace gazebo{
         /// \brief Nubot moving fuction: rotation + translation
         /// \param[in] linear_vel_vector translation velocity 3D vector
         /// \param[in] angular_vel_vector rotation velocity 3D vector
-        void nubot_locomotion(math::Vector3 linear_vel_vector, math::Vector3 angular_vel_vector);
+        void nubot_locomotion(ignition::math::Vector3d linear_vel_vector, ignition::math::Vector3d angular_vel_vector);
 
         /// \brief Nubot dribbling ball function. The football follows nubot movement.
         void dribble_ball(void);
