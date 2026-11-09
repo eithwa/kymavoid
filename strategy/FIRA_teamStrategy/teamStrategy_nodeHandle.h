@@ -20,6 +20,7 @@
  *****************************************************************************/
 #include <ros/ros.h>
 #include <string>
+#include <vector>
 #include "../common/Env.h"
 #include "../common/BaseNode.h"
 
@@ -87,7 +88,7 @@ private:
     
     void Transfer(int);
     
-    std::string model_array[11];
+    std::vector<std::string> model_array;   // was a fixed [11] array: overflowed on worlds with >11 models
     ros::NodeHandle *n;
     
     ros::Subscriber GameState;
@@ -133,18 +134,17 @@ private:
          //            printf("%d\n",model_length);
          }*/
         printf("model_length= %d",model_length);
-        for(int i = 0; i<model_length;i++){
-            model_array[i] = msg->name[i];
-            //            printf("%d = %s\n",i,model_array[i].c_str());
-        }
+        model_array = msg->name;
         run_one = true;
         //        printf("%s\n",model_array[6].c_str());
     }
+    // Returns -1 when the model is not in the world (e.g. no "soccer"/"R1" in the avoid challenge);
+    // the old version fell off the end without a return value, which is undefined behaviour.
     int get_model_num(const std::string ModelName){
-        int send_back_num;
-        for(int i =0; i< 11; i++){
-            if(model_array[i] == ModelName) return i;
+        for(size_t i = 0; i < model_array.size(); i++){
+            if(model_array[i] == ModelName) return (int)i;
         }
+        return -1;
     }
     
     void subGameState(const std_msgs::Int32::ConstPtr &msg){
@@ -162,6 +162,7 @@ private:
         //        global_env->currentBall.pos.y = msg->y;
         int model_num;
         model_num = get_model_num("soccer");
+        if(model_num < 0 || model_num >= (int)msg->pose.size()) return;
         //        printf("model_num=%d\n",model_num);
         //        ROS_INFO("name=%s",msg->name[1].c_str());
         geometry_msgs::Pose tPose = msg->pose[model_num];
@@ -187,6 +188,7 @@ private:
         //        global_env->home[0].rotation = yaw;
         int model_num;
         model_num = get_model_num("R1");
+        if(model_num < 0 || model_num >= (int)msg->pose.size()) return;
         //        printf("model_num=%d\n",model_num);
         geometry_msgs::Pose tPose = msg->pose[model_num];
         global_env->home[0].pos.x = tPose.position.x;
@@ -215,6 +217,7 @@ private:
         //        global_env->home[1].rotation = yaw;
         int model_num;
         model_num = get_model_num("R2");
+        if(model_num < 0 || model_num >= (int)msg->pose.size()) return;
         geometry_msgs::Pose tPose = msg->pose[model_num];
         global_env->home[1].pos.x = tPose.position.x;
         global_env->home[1].pos.y = tPose.position.y;
@@ -243,6 +246,7 @@ private:
         
         int model_num;
         model_num = get_model_num("R3");
+        if(model_num < 0 || model_num >= (int)msg->pose.size()) return;
         geometry_msgs::Pose tPose = msg->pose[model_num];
         global_env->home[2].pos.x = tPose.position.x;
         global_env->home[2].pos.y = tPose.position.y;
