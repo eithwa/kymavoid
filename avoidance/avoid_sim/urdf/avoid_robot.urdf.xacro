@@ -1,0 +1,119 @@
+<?xml version="1.0"?>
+<!-- Avoidance-challenge robot for Gazebo: robot6th at its true size, footprint collision,
+     planar_move drive and (lidar config only) three Hokuyo lidars 60 cm high, 120 deg apart. -->
+<robot name="avoid_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="sensor" default="camera"/>          <!-- camera | lidar -->
+  <xacro:arg name="lidar_fov_deg" default="240"/>      <!-- Hokuyo model unknown: parameters -->
+  <xacro:arg name="lidar_samples" default="667"/>      <!-- 0.36 deg resolution over 240 deg -->
+  <xacro:arg name="lidar_range" default="8.0"/>        <!-- sees the far end of the field -->
+  <xacro:arg name="lidar_rate" default="10"/>
+  <xacro:arg name="lidar_mount_r" default="0.15"/>     <!-- assumed inside the footprint -->
+  <xacro:property name="lidar_z" value="0.60"/>
+
+  <link name="base_footprint"/>
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+  </joint>
+
+  <!-- Meshes: robot frame, metres, z = 0 at the floor (robot6th_description/scripts/make_robot6th_meshes.py). -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0.30"/>
+      <mass value="31"/>
+      <inertia ixx="1.64" ixy="0" ixz="0" iyy="1.64" iyz="0" izz="0.83"/>
+    </inertial>
+    <visual>
+      <geometry><mesh filename="package://robot6th_description/meshes/robot6th.stl"/></geometry>
+    </visual>
+    <!-- Exact footprint for contact, kept below the 0.60 m lidar plane (0.688 m -> 0.50 m). Obstacles
+         are 1 m tall, so the 2D contact is unchanged. What the lidars hit of the robot itself is
+         modelled separately by the self-occluder posts below. -->
+    <collision>
+      <geometry><mesh filename="package://robot6th_description/meshes/robot6th_collision.stl" scale="1 1 0.7262"/></geometry>
+    </collision>
+  </link>
+  <gazebo reference="base_link">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+  </gazebo>
+
+  <!-- planar_move publishes perfect odometry; avoid_sim/odom_noise turns it into realistic /odom.
+       Its own TF (sim_odom -> sim_base) is kept apart from the robot's TF tree on purpose. -->
+  <gazebo>
+    <plugin name="planar_move" filename="libgazebo_ros_planar_move.so">
+      <commandTopic>cmd_vel</commandTopic>
+      <odometryTopic>sim/odom_true</odometryTopic>
+      <odometryFrame>sim_odom</odometryFrame>
+      <robotBaseFrame>sim_base</robotBaseFrame>
+      <odometryRate>50.0</odometryRate>
+      <cmdTimeout>0.5</cmdTimeout>
+    </plugin>
+  </gazebo>
+
+  <xacro:macro name="hokuyo" params="idx yaw_deg">
+    <joint name="laser_${idx}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="laser_${idx}"/>
+      <origin xyz="${$(arg lidar_mount_r) * cos(radians(yaw_deg))} ${$(arg lidar_mount_r) * sin(radians(yaw_deg))} ${lidar_z}"
+              rpy="0 0 ${radians(yaw_deg)}"/>
+    </joint>
+    <link name="laser_${idx}"/>
+    <gazebo reference="laser_${idx}">
+      <sensor type="ray" name="laser_${idx}">
+        <visualize>false</visualize>
+        <update_rate>$(arg lidar_rate)</update_rate>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>$(arg lidar_samples)</samples>
+              <resolution>1</resolution>
+              <min_angle>${-radians($(arg lidar_fov_deg)) / 2}</min_angle>
+              <max_angle>${radians($(arg lidar_fov_deg)) / 2}</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.06</min>
+            <max>$(arg lidar_range)</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.01</stddev>
+          </noise>
+        </ray>
+        <plugin name="laser_${idx}_driver" filename="libgazebo_ros_laser.so">
+          <topicName>scan_${idx}</topicName>
+          <frameName>laser_${idx}</frameName>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- Self-occluders: on the real robot the lidars also hit the robot itself (brackets, cables,
+       parts that are not in the CAD; the CAD has only the 4 cm camera mast at lidar height).
+       These thin posts at lidar height, inside the footprint, make the simulated lidars hit the
+       robot too, so the self-filter in the lidar adapter is exercised. Positions are guesses. -->
+  <xacro:macro name="self_occluder" params="idx r yaw_deg">
+    <joint name="self_occluder_${idx}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="self_occluder_${idx}"/>
+      <origin xyz="${r * cos(radians(yaw_deg))} ${r * sin(radians(yaw_deg))} ${lidar_z}"/>
+    </joint>
+    <link name="self_occluder_${idx}">
+      <inertial><mass value="0.01"/><inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/></inertial>
+      <visual><geometry><cylinder radius="0.012" length="0.12"/></geometry></visual>
+      <collision><geometry><cylinder radius="0.012" length="0.12"/></geometry></collision>
+    </link>
+  </xacro:macro>
+
+  <xacro:if value="${'$(arg sensor)' == 'lidar'}">
+    <xacro:hokuyo idx="0" yaw_deg="180"/>   <!-- straight back -->
+    <xacro:hokuyo idx="1" yaw_deg="60"/>    <!-- front left -->
+    <xacro:hokuyo idx="2" yaw_deg="-60"/>   <!-- front right -->
+    <xacro:self_occluder idx="0" r="0.17" yaw_deg="120"/>
+    <xacro:self_occluder idx="1" r="0.17" yaw_deg="-120"/>
+    <xacro:self_occluder idx="2" r="0.10" yaw_deg="0"/>
+  </xacro:if>
+</robot>

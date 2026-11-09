@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!-- Avoidance-challenge simulation (pure Gazebo, no robot drivers).
+     sensor:=camera  virtual panoramic camera -> /vision/BlackRealDis, /vision/redRealDis (as black_item)
+     sensor:=lidar   three Hokuyo lidars -> /scan_0, /scan_1, /scan_2
+     Always: /cmd_vel in, /odom (noisy) and /imu/yaw out, /avoid_sim/reset service. -->
+<launch>
+  <arg name="gui" default="true"/>
+  <arg name="sensor" default="camera"/>
+  <arg name="layout" default="random"/>   <!-- random | classic -->
+  <arg name="seed" default="1"/>          <!-- < 0: random seed -->
+  <arg name="paused" default="false"/>
+
+  <rosparam command="load" file="$(find avoid_nav)/config/field.yaml"/>
+  <rosparam command="load" file="$(find avoid_nav)/config/camera.yaml"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <!-- package://robot6th_description meshes become model://robot6th_description in Gazebo -->
+    <env name="GAZEBO_MODEL_PATH" value="$(find robot6th_description)/..:$(optenv GAZEBO_MODEL_PATH)"/>
+    <arg name="world_name" value="$(find avoid_sim)/worlds/avoid_field.world"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="use_sim_time" value="true"/>
+  </include>
+
+  <param name="robot_description"
+         command="$(find xacro)/xacro $(find avoid_sim)/urdf/avoid_robot.urdf.xacro sensor:=$(arg sensor)"/>
+  <node name="spawn_robot" pkg="gazebo_ros" type="spawn_model"
+        args="-urdf -param robot_description -model avoid_robot -x -2.0 -y 0 -z 0.01"/>
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
+
+  <node name="field_manager" pkg="avoid_sim" type="field_manager.py" output="screen">
+    <param name="layout" value="$(arg layout)"/>
+    <param name="seed" value="$(arg seed)"/>
+  </node>
+  <node name="odom_noise" pkg="avoid_sim" type="odom_noise.py"/>
+  <node if="$(eval sensor == 'camera')" name="virtual_camera" pkg="avoid_sim" type="virtual_camera.py"/>
+</launch>

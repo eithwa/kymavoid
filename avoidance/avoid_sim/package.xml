@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>avoid_sim</name>
+  <version>0.1.0</version>
+  <description>Gazebo simulation for the avoidance challenge: field, robot, virtual camera, odometry noise, field reset.</description>
+  <maintainer email="mike.kang@coretronic.com">mike.kang</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>avoid_msgs</exec_depend>
+  <exec_depend>avoid_nav</exec_depend>
+  <exec_depend>robot6th_description</exec_depend>
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_plugins</exec_depend>
+  <exec_depend>gazebo_msgs</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+</package>

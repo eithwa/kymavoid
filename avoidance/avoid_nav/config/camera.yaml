@@ -1,0 +1,20 @@
+# Panoramic camera model, shared by the real camera adapter and avoid_sim's virtual camera.
+# Values from vision/config/FIRA (default).yaml and vision/black_item (the real pipeline).
+camera:
+  camera_high: 654          # [mm] mirror model parameter (Center/Camera_high)
+  # Mirror centre in black_item's image (the raw frame flipped left/right). It moves between
+  # sessions (up to ~38 px in the recorded images), so the adapter re-measures it at start-up.
+  center_x: 302
+  center_y: 246
+  inner: 40                 # [px] black_item starts every scan line here (~32 cm)
+  outer: 229                # [px]
+  front: 272                # [deg] image angle of scan line 0 (= robot front)
+  image_width: 640
+  image_height: 480
+  scan_step_deg: 3          # 120 scan lines, published as /vision/BlackRealDis, /vision/redRealDis
+  # Scan line i points (index_direction * 3 i) deg from the front; +1 = counter-clockwise (REP 103).
+  # Derived from FIRA_strategy's remap (reddis[(119 - i + 61) % 120], index 30 = left).
+  index_direction: 1
+  # Mirror support struts (Dont_Search_Angle_1..3), assumed in the robot frame, CCW from the front.
+  strut_angles_deg: [47, 164, 285]
+  strut_half_width_px: 1.5

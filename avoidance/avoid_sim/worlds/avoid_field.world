@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<!-- Avoidance challenge field (avoid_nav/config/field.yaml). World frame = field frame:
+     x from the start towards the goal, y to the left, origin at the field centre.
+     Red lines and the start/goal lines are flat decals without collision, so the lidar cannot see
+     them (as on the real field); touching them is judged geometrically by the evaluator.
+     The low black wall is 0.2 m high: below the 0.6 m lidars, but solid.
+     Obstacles are spawned and moved by avoid_sim/field_manager. -->
+<sdf version="1.6">
+  <world name="avoid_field">
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <!-- straight down over the field centre, +x (goal) to the right of the screen -->
+        <pose>0.25 0 9 0 1.5707 1.5707</pose>
+        <projection_type>orthographic</projection_type>
+      </camera>
+    </gui>
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.85 0.85 0.85 1</background>
+      <shadows>false</shadows>
+    </scene>
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <model name="field_markings">
+      <static>true</static>
+      <link name="link">
+        <visual name="carpet">
+          <pose>0 0 0.001 0 0 0</pose>
+          <geometry><box><size>7.25 5.25 0.002</size></box></geometry>
+          <material><ambient>0.05 0.35 0.3 1</ambient><diffuse>0.05 0.35 0.3 1</diffuse></material>
+        </visual>
+        <visual name="red_line_left">
+          <pose>0 1.5 0.003 0 0 0</pose>
+          <geometry><box><size>6 0.05 0.002</size></box></geometry>
+          <material><ambient>0.9 0 0 1</ambient><diffuse>0.9 0 0 1</diffuse></material>
+        </visual>
+        <visual name="red_line_right">
+          <pose>0 -1.5 0.003 0 0 0</pose>
+          <geometry><box><size>6 0.05 0.002</size></box></geometry>
+          <material><ambient>0.9 0 0 1</ambient><diffuse>0.9 0 0 1</diffuse></material>
+        </visual>
+        <visual name="start_line">
+          <pose>-2.0 0 0.003 0 0 0</pose>
+          <geometry><box><size>0.05 2.95 0.002</size></box></geometry>
+          <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+        </visual>
+        <visual name="goal_line">
+          <pose>3.0 0 0.003 0 0 0</pose>
+          <geometry><box><size>0.05 2.95 0.002</size></box></geometry>
+          <material><ambient>1 0.85 0 1</ambient><diffuse>1 0.85 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="low_wall">
+      <static>true</static>
+      <link name="link">
+        <collision name="c_left"><pose>0 2.55 0.1 0 0 0</pose><geometry><box><size>7.25 0.15 0.2</size></box></geometry></collision>
+        <collision name="c_right"><pose>0 -2.55 0.1 0 0 0</pose><geometry><box><size>7.25 0.15 0.2</size></box></geometry></collision>
+        <collision name="c_back"><pose>-3.55 0 0.1 0 0 0</pose><geometry><box><size>0.15 5.25 0.2</size></box></geometry></collision>
+        <collision name="c_front"><pose>3.55 0 0.1 0 0 0</pose><geometry><box><size>0.15 5.25 0.2</size></box></geometry></collision>
+        <visual name="v_left"><pose>0 2.55 0.1 0 0 0</pose><geometry><box><size>7.25 0.15 0.2</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+        <visual name="v_right"><pose>0 -2.55 0.1 0 0 0</pose><geometry><box><size>7.25 0.15 0.2</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+        <visual name="v_back"><pose>-3.55 0 0.1 0 0 0</pose><geometry><box><size>0.15 5.25 0.2</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+        <visual name="v_front"><pose>3.55 0 0.1 0 0 0</pose><geometry><box><size>0.15 5.25 0.2</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+  </world>
+</sdf>

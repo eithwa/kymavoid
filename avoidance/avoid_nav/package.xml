@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>avoid_nav</name>
+  <version>0.1.0</version>
+  <description>Avoidance-challenge navigation: localisation, planning, safety and the state machine.</description>
+  <maintainer email="mike.kang@coretronic.com">mike.kang</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>roscpp</depend>
+  <depend>avoid_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+</package>

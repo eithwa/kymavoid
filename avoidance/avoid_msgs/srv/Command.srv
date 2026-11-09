@@ -1,0 +1,5 @@
+# start | stop | reset
+string command
+---
+bool success
+string message
