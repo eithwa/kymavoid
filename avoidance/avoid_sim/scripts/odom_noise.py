@@ -40,10 +40,13 @@ class OdomNoise:
         self.imu_pub = rospy.Publisher('/imu/yaw', Float64, queue_size=10)
         self.tfb = tf2_ros.TransformBroadcaster()
         self.new_run()
-        rospy.Subscriber('/avoid_sim/reset_event', Header, lambda _: self.new_run())
+        # reseeded on every field reset, so a seed reproduces the same odometry errors
+        rospy.Subscriber('/avoid_sim/reset_event', Header, lambda ev: self.new_run(ev.seq))
         rospy.Subscriber('/sim/odom_true', Odometry, self.on_truth, queue_size=50)
 
-    def new_run(self):
+    def new_run(self, seed=None):
+        if seed is not None:
+            self.rng = np.random.default_rng(int(seed) * 7919 + 1)
         self.scale = 1.0 + self.rng.normal(0.0, self.scale_std)
         self.imu_offset = self.rng.uniform(-math.pi, math.pi)
         self.imu_bias = 0.0

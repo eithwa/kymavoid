@@ -13,7 +13,7 @@ import numpy as np
 import rospy
 from geometry_msgs.msg import PoseArray
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Header, Int32MultiArray
 
 from avoid_sim.geometry import Field
 from avoid_sim.omni import MaskRenderer, OmniModel, Scanner
@@ -41,6 +41,9 @@ class VirtualCamera:
         self.black_pub = rospy.Publisher('/vision/BlackRealDis', Int32MultiArray, queue_size=1)
         self.red_pub = rospy.Publisher('/vision/redRealDis', Int32MultiArray, queue_size=1)
         rospy.Subscriber('/avoid_sim/layout', PoseArray, self.on_layout)
+        # reseeded on every field reset, so a seed reproduces the same camera noise
+        rospy.Subscriber('/avoid_sim/reset_event', Header,
+                         lambda ev: setattr(self, 'rng', np.random.default_rng(int(ev.seq) * 104729 + 2)))
         rospy.Subscriber('/sim/odom_true', Odometry, self.on_truth, queue_size=50)
         rospy.Timer(rospy.Duration(1.0 / p('rate', 30.0)), self.tick)
 
