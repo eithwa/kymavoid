@@ -29,6 +29,13 @@ include(FindPythonInterp)
 if (NOT DEFINED PYTHONINTERP_FOUND)
 	message(FATAL_ERROR "Could not locate python interpreter, python is required to generate freespace messages)")
 endif()
+# messageCodeGenerator.py is Python 2 only; ROS Noetic sets PYTHON_EXECUTABLE to python3.
+find_program(FREESPACE_PYTHON2_EXECUTABLE NAMES python2 python2.7)
+if (FREESPACE_PYTHON2_EXECUTABLE)
+	set(FREESPACE_CODEGEN_PYTHON ${FREESPACE_PYTHON2_EXECUTABLE})
+else()
+	set(FREESPACE_CODEGEN_PYTHON ${PYTHON_EXECUTABLE})
+endif()
 
 if (WIN32)
     set(LIBFREESPACE_LIB_TYPE_DEFAULT "STATIC")
@@ -60,7 +67,7 @@ set(LIBFREESPACE_CODEC_HDRS
 add_custom_command(
     OUTPUT ${LIBFREESPACE_CODEC_SRCS} ${LIBFREESPACE_CODEC_HDRS}
     COMMAND
-        ${PYTHON_EXECUTABLE}
+        ${FREESPACE_CODEGEN_PYTHON}
         "${PROJECT_SOURCE_DIR}/common/messageCodeGenerator.py"
         "-I" "${PROJECT_BINARY_DIR}/include/"
         "-s" "${PROJECT_BINARY_DIR}/gen_src/"

@@ -8,7 +8,7 @@
 #include <dynamic_reconfigure/DoubleParameter.h>
 #include <dynamic_reconfigure/Reconfigure.h>
 #include <dynamic_reconfigure/Config.h>
-#include <highgui.h>
+#include <opencv2/highgui/highgui.hpp>
 #include <vector>
 #include <math.h>
 #include <signal.h>

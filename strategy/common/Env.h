@@ -118,7 +118,8 @@ typedef struct
 
 
 
-#define pi 3.14159
+// was "#define pi 3.14159": the macro clobbers identifiers named pi in newer Boost headers
+static const double pi = 3.14159;
 #define very_small 0.000001
 
 #define rad2deg 180/pi

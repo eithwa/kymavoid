@@ -39,7 +39,7 @@ void BaseNode::shutdown() {
       ros::shutdown(); // explicitly needed since we use ros::start();
       ros::waitForShutdown();
     }
-	wait();
+	// wait();  // leftover from the QThread-based template; BaseNode is not a thread
 }
 
 bool BaseNode::on_init() {

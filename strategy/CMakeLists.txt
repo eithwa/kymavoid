@@ -12,7 +12,7 @@ find_package(catkin)
 #message(kkkkkTest catkin_INCLUDE_DIRS=${catkin_INCLUDE_DIRS})
 # These find_package calls setup catkin_INCLUDE_DIRS and ROS_LIBRARIES and 
 # all the component variables too (e.g. roscpp_INCLUDE_DIR?)
-find_package(catkin REQUIRED COMPONENTS qt_build message_generation std_msgs roscpp
+find_package(catkin REQUIRED COMPONENTS message_generation std_msgs roscpp
 	     sensor_msgs cv_bridge image_transport)
 include_directories(${catkin_INCLUDE_DIRS})
 
@@ -22,7 +22,7 @@ include_directories(${catkin_INCLUDE_DIRS})
 
 # this comes from qt_build's qt-ros.cmake which is automatically 
 # included via the dependency call in manifest.xml
-rosbuild_prepare_qt4(QtCore QtGui) # Add the appropriate components to the component list here
+# rosbuild_prepare_qt4(QtCore QtGui) # Add the appropriate components to the component list here
 
 ##############################################################################
 # Services
