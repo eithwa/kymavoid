@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- Avoidance navigation (same for the real robot and the simulation).
+     sensor:=camera  camera_adapter: /vision/BlackRealDis, /vision/redRealDis -> /scan, /boundary
+     sensor:=lidar   lidar_adapter:  /scan_0..2 -> /scan (self hits removed)
+     nav_node:       /scan, /boundary, /odom, /imu/yaw -> /cmd_vel, /avoid/status, /avoid/command -->
+<launch>
+  <arg name="sensor" default="camera"/>
+  <rosparam command="load" file="$(find avoid_nav)/config/field.yaml"/>
+  <rosparam command="load" file="$(find avoid_nav)/config/camera.yaml"/>
+  <rosparam command="load" ns="robot" file="$(find robot6th_description)/config/robot6th_footprint.yaml"/>
+
+  <node if="$(eval sensor == 'camera')" name="camera_adapter" pkg="avoid_nav" type="camera_adapter" output="screen"/>
+  <node if="$(eval sensor == 'lidar')" name="lidar_adapter" pkg="avoid_nav" type="lidar_adapter" output="screen"/>
+  <node name="nav_node" pkg="avoid_nav" type="nav_node" output="screen">
+    <param name="sensor_config" value="$(arg sensor)"/>
+  </node>
+</launch>

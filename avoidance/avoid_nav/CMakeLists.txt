@@ -1,4 +1,25 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(avoid_nav)
-find_package(catkin REQUIRED COMPONENTS roscpp avoid_msgs geometry_msgs nav_msgs sensor_msgs std_msgs)
-catkin_package(CATKIN_DEPENDS roscpp avoid_msgs geometry_msgs nav_msgs sensor_msgs std_msgs)
+add_compile_options(-std=c++14 -Wall -Wextra)
+find_package(catkin REQUIRED COMPONENTS roscpp avoid_msgs geometry_msgs nav_msgs sensor_msgs std_msgs tf2_ros)
+catkin_package(
+  INCLUDE_DIRS include
+  CATKIN_DEPENDS roscpp avoid_msgs geometry_msgs nav_msgs sensor_msgs std_msgs tf2_ros)
+include_directories(include ${catkin_INCLUDE_DIRS})
+
+add_executable(camera_adapter src/camera_adapter.cpp)
+target_link_libraries(camera_adapter ${catkin_LIBRARIES})
+add_dependencies(camera_adapter ${catkin_EXPORTED_TARGETS})
+
+add_executable(lidar_adapter src/lidar_adapter.cpp)
+target_link_libraries(lidar_adapter ${catkin_LIBRARIES})
+add_dependencies(lidar_adapter ${catkin_EXPORTED_TARGETS})
+
+add_executable(nav_node src/nav_node.cpp)
+target_link_libraries(nav_node ${catkin_LIBRARIES})
+add_dependencies(nav_node ${catkin_EXPORTED_TARGETS})
+
+catkin_install_python(PROGRAMS scripts/motion_adapter.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(TARGETS camera_adapter lidar_adapter nav_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(DIRECTORY include/${PROJECT_NAME}/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+install(DIRECTORY config launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
