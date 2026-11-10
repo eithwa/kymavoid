@@ -4,6 +4,7 @@
   <arg name="sensor" default="camera"/>   <!-- camera | lidar -->
   <arg name="nav" default="true"/>
   <arg name="bridge_port" default="9090"/>
+  <arg name="mjpeg_port" default="8080"/>
   <arg name="gui" default="true"/>
   <arg name="layout" default="random"/>   <!-- random | classic -->
   <arg name="seed" default="1"/>
@@ -17,6 +18,10 @@
   <include if="$(arg nav)" file="$(find avoid_nav)/launch/nav.launch">
     <arg name="sensor" value="$(arg sensor)"/>
   </include>
+  <!-- the virtual camera's /camera/black and /camera/red for the web UI, as on the robot -->
+  <node if="$(eval sensor == 'camera')" name="mjpeg_server" pkg="mjpeg_server" type="mjpeg_server" respawn="true" respawn_delay="5">
+    <param name="port" value="$(arg mjpeg_port)"/>
+  </node>
   <!-- pings every node: crashed nodes stay registered with the master (web UI node list) -->
   <node name="node_watch" pkg="avoid_bringup" type="node_watch.py"/>
   <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">

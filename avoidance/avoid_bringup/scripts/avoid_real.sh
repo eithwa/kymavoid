@@ -52,6 +52,6 @@ fi
 
 info "real robot, $SENSOR configuration"
 start_session "$SESSION" \
-  "roslaunch avoid_bringup real.launch nav:=false sensor:=$SENSOR bridge_port:=$BRIDGE_PORT$EXTRA_ARGS" \
+  "roslaunch avoid_bringup real.launch nav:=false sensor:=$SENSOR bridge_port:=$BRIDGE_PORT mjpeg_port:=$MJPEG_PORT$EXTRA_ARGS" \
   "$SENSOR"
 attach_session "$SESSION"

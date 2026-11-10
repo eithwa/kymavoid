@@ -8,6 +8,7 @@
   <arg name="sensor" default="camera"/>
   <arg name="nav" default="true"/>
   <arg name="bridge_port" default="9090"/>
+  <arg name="mjpeg_port" default="8080"/>
   <arg name="lidar_mount_r" default="0.15"/>    <!-- guess, measure on the robot (docs 2.3) -->
   <arg name="lidar_port_0" default="/dev/ttyACM0"/>   <!-- straight back -->
   <arg name="lidar_port_1" default="/dev/ttyACM1"/>   <!-- front left (+60 deg) -->
@@ -19,7 +20,9 @@
     <rosparam command="load" ns="prosilica_driver" file="$(find vision)/config/prosilica_driver.yaml"/>
     <node name="prosilica_driver" pkg="prosilica_camera" type="prosilica_node" respawn="true" respawn_delay="5" output="screen"/>
     <node name="black_item" pkg="vision" type="black_item" respawn="true" respawn_delay="1"/>
-    <node name="mjpeg_server" pkg="mjpeg_server" type="mjpeg_server" respawn="true" respawn_delay="5"/>
+    <node name="mjpeg_server" pkg="mjpeg_server" type="mjpeg_server" respawn="true" respawn_delay="5">
+      <param name="port" value="$(arg mjpeg_port)"/>
+    </node>
   </group>
 
   <!-- lidar configuration -->

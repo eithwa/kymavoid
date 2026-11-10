@@ -28,9 +28,11 @@
       <label class="sim-only"><input type="checkbox" id="show-truth" checked> 真值（模擬）</label>
       <span id="cursor-pos"></span>
     </div>
+    <div id="toasts"></div>
   </section>
 
   <aside id="side">
+   <div id="side-main" class="side-col">
     <div id="state-card">
       <div class="state-row">
         <span id="state-name" class="state">未連線</span>
@@ -65,6 +67,13 @@
       <div id="limit-legend"></div>
     </div>
 
+    <div class="card">
+      <h3>上一輪</h3>
+      <div id="last-run" class="muted">還沒有跑過</div>
+    </div>
+   </div>
+
+   <div id="side-tabs" class="side-col">
     <nav id="tabs">
       <button data-tab="run" class="active">執行</button>
       <button data-tab="params">參數</button>
@@ -72,12 +81,13 @@
       <button data-tab="camera" class="camera-only">影像</button>
     </nav>
 
+    <div id="tab-body">
     <div class="tab active" id="tab-run">
       <div class="card sim-only" id="sim-card">
         <h3>模擬場地</h3>
         <div class="row">
           <label>seed <input type="number" id="sim-seed" value="1" min="0" step="1"></label>
-          <button id="sim-random" class="btn small" title="隨機 seed">🎲</button>
+          <button id="sim-random" class="btn small" title="隨機 seed，並重擺場地">🎲</button>
           <label>擺法
             <select id="sim-layout">
               <option value="random">隨機（規格）</option>
@@ -90,6 +100,7 @@
           <button id="sim-next" class="btn" title="seed + 1 後重擺">下一個 seed</button>
         </div>
         <div id="sim-info" class="muted"></div>
+        <div class="muted">按「開始」會先用這個 seed 重擺場地，車子從起點出發。</div>
         <details id="case-form">
           <summary>記錄這個 case</summary>
           <div class="muted">把目前的場地（障礙物位置、起點、seed）存進 <code>avoid_sim/cases/</code>，之後可以重跑、拿來當測試。</div>
@@ -119,10 +130,6 @@
         <h3>節點</h3>
         <div id="nodes"></div>
       </div>
-      <div class="card">
-        <h3>上一輪</h3>
-        <div id="last-run" class="muted">還沒有跑過</div>
-      </div>
     </div>
 
     <div class="tab" id="tab-params">
@@ -141,21 +148,24 @@
     </div>
 
     <div class="tab" id="tab-camera">
-      <div class="row">
-        <select id="cam-topic">
-          <option value="/camera/black">黑色遮罩 /camera/black</option>
-          <option value="/camera/red">紅色遮罩 /camera/red</option>
-          <option value="/camera/image_raw">原始影像 /camera/image_raw</option>
-        </select>
-        <button id="cam-toggle" class="btn small">顯示</button>
+      <div class="row" id="cam-pick">
+        <label><input type="checkbox" value="/camera/black" checked> 黑色遮罩（障礙物）</label>
+        <label><input type="checkbox" value="/camera/red" checked> 紅色遮罩（紅線）</label>
+        <label class="real-only"><input type="checkbox" value="/camera/image_raw"> 原始影像</label>
       </div>
-      <img id="cam-img" alt="">
-      <div class="muted">影像來自 mjpeg_server（:8080），只有實車攝影機設定才有。</div>
+      <div id="cam-views"></div>
+      <div class="muted sim-only cam-legend">
+        <span><i style="background:#ebebeb"></i>黑色障礙物、矮牆</span><span><i style="background:#e53935"></i>紅線</span>
+        <span><i style="background:#ff9800"></i>掃描找到的障礙物</span><span><i style="background:#f2c94c"></i>掃描找到的紅線</span>
+        <span><i style="background:#4c8dff"></i>掃描外圈</span><span><i style="background:#3fb950"></i>正前方</span>
+      </div>
+      <div class="muted" id="cam-note"></div>
     </div>
+    </div>
+   </div>
   </aside>
 </main>
 
-<div id="toasts"></div>
 <script src="app.js"></script>
 </body>
 </html>

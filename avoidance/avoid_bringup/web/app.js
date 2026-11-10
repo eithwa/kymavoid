@@ -80,7 +80,8 @@ function toast(title, msg = '', kind = 'ok') {
   el.querySelector('.t').textContent = title;
   el.querySelector('.m').textContent = msg;
   $('toasts').appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 400); }, kind === 'err' ? 8000 : 4000);
+  while ($('toasts').children.length > 4) $('toasts').firstChild.remove();
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 400); }, kind === 'err' ? 8000 : 2500);
 }
 
 // ------------------------------------------------------------------ ROS helpers
@@ -189,7 +190,10 @@ function updateModeTag() {
   const sensor = S.sensor ? (S.sensor === 'camera' ? '攝影機' : '雷射') : '?';
   tag.textContent = S.connected ? `${S.isSim ? '模擬' : '實車'} · ${sensor}` : '—';
   tag.className = 'tag ' + (S.connected ? (S.isSim ? 'sim' : 'real') : '');
-  document.body.classList.toggle('is-camera', S.sensor === 'camera' && !S.isSim);
+  // camera images: black_item on the robot, virtual_camera in the simulation (both via mjpeg_server)
+  document.body.classList.toggle('is-camera', S.sensor === 'camera');
+  if (S.sensor !== 'camera' && activeTab() === 'camera') showTab('run');
+  else syncCamera();
 }
 
 // subscriptions that depend on toggles / the mode
@@ -303,7 +307,7 @@ function expectedNodes() {
   if (S.sensor === 'lidar') l.push('/lidar_adapter');
   if (S.isSim) {
     l.push('/gazebo', '/field_manager', '/odom_noise', '/robot_state_publisher');
-    if (S.sensor === 'camera') l.push('/virtual_camera');
+    if (S.sensor === 'camera') l.push('/virtual_camera', '/mjpeg_server');
   } else {
     l.push('/motion', '/imu_3d', '/motion_adapter', '/robot_state_publisher');
     if (S.sensor === 'camera') l.push('/prosilica_driver', '/black_item', '/mjpeg_server');
@@ -416,7 +420,7 @@ function renderStatus() {
   }
   const running = st && (st.state_name === 'RUNNING' || st.state_name === 'MAPPING');
   $('btn-start').disabled = !!why || running || busy.start;
-  $('start-hint').textContent = why;
+  $('start-hint').textContent = busy.start ? startPhase : why;
 }
 
 // ------------------------------------------------------------------ speed
@@ -546,17 +550,43 @@ function zeroBurst() {
   for (let i = 0; i < 10; ++i) setTimeout(() => S.connected && cmdVel.publish(zero), i * 50);
 }
 
+// Simulation: every start re-draws the field with the current seed first, so the robot leaves from
+// the start pose (nav_node's start anchors the localisation there) on an untouched field. Same
+// order as evaluate.py: reset, let the sensors refresh after the teleport, start. Stop (or a
+// second start sequence) during the wait cancels it.
+let startSeq = 0, startPhase = '';
+const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
+
+function inputsFresh() {
+  const st = S.status;
+  return navAlive() && [st.age_obstacles, st.age_odom, st.age_imu].every((a) => ageClass(a) === 'ok');
+}
+
 async function doStart() {
   if ($('btn-start').disabled) return;
+  const seq = ++startSeq;
   busy.start = true;
   $('btn-start').classList.add('busy');
-  await command('start');
-  busy.start = false;
-  $('btn-start').classList.remove('busy');
+  try {
+    if (S.isSim) {
+      startPhase = '重擺場地中…';
+      if (!(await simReset(false, true)) || seq !== startSeq) return;
+      startPhase = '等感測器更新…';
+      await sleep(1.5);
+      for (let i = 0; i < 50 && seq === startSeq && !inputsFresh(); ++i) await sleep(0.1);
+      if (seq !== startSeq) return;          // stopped meanwhile
+    }
+    await command('start', true);            // a refusal still shows its reason
+  } finally {
+    busy.start = false;
+    startPhase = '';
+    $('btn-start').classList.remove('busy');
+  }
 }
 async function doStop() {
+  ++startSeq;
   zeroBurst();
-  await command('stop', S.status && S.status.state_name === 'IDLE');
+  await command('stop', true);
 }
 $('btn-start').addEventListener('click', doStart);
 $('btn-reset').addEventListener('click', async () => {
@@ -573,27 +603,32 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// simulation: re-draw the field
+// simulation: re-draw the field (the result goes in the sim card, only failures as a toast)
+const SIM_BUTTONS = ['sim-reset', 'sim-next', 'sim-random'];
 async function simReset(nextSeed) {
   const seedEl = $('sim-seed');
   if (nextSeed) seedEl.value = String((parseInt(seedEl.value, 10) || 0) + 1);
   const seed = parseInt(seedEl.value, 10);
-  if (!Number.isFinite(seed) || seed < 0) { toast('seed 要是 0 以上的整數', '', 'err'); return; }
-  for (const id of ['sim-reset', 'sim-next']) $(id).disabled = true;
+  if (!Number.isFinite(seed) || seed < 0) { toast('seed 要是 0 以上的整數', '', 'err'); return false; }
+  for (const id of SIM_BUTTONS) $(id).disabled = true;
+  let ok = false;
   try {
     if (S.status && S.status.state_name !== 'IDLE') await command('stop', true);
+    $('sim-info').textContent = `seed ${seed}：重擺中…`;
     const r = await call('/avoid_sim/reset', 'avoid_msgs/ResetField',
       { seed, layout: $('sim-layout').value, start_error_xy: 0, start_error_yaw: 0, use_obstacles: [], use_start: [] }, 20);
     if (r.success) {
       await command('reset', true);       // robot back on the start pose: re-anchor, forget the old obstacle map
       clearRunDisplay();
       $('sim-info').textContent = `seed ${r.seed}：${r.obstacles.length} 個障礙物，取樣 ${r.attempts} 次`;
-      toast(`場地已重擺（seed ${r.seed}）`, r.message, 'ok');
-    } else toast('重擺失敗', r.message, 'err');
+      ok = true;
+    } else { toast('重擺失敗', r.message, 'err'); $('sim-info').textContent = `seed ${seed}：重擺失敗`; }
   } catch (e) {
     toast('重擺失敗', e.message, 'err');
+    $('sim-info').textContent = `seed ${seed}：重擺失敗`;
   }
-  for (const id of ['sim-reset', 'sim-next']) $(id).disabled = false;
+  for (const id of SIM_BUTTONS) $(id).disabled = false;
+  return ok;
 }
 async function saveCase() {
   const expect = {};
@@ -622,14 +657,19 @@ async function saveCase() {
 $('case-save').addEventListener('click', saveCase);
 $('sim-reset').addEventListener('click', () => simReset(false));
 $('sim-next').addEventListener('click', () => simReset(true));
-$('sim-random').addEventListener('click', () => { $('sim-seed').value = String(Math.floor(Math.random() * 100000)); });
+$('sim-random').addEventListener('click', () => {
+  $('sim-seed').value = String(Math.floor(Math.random() * 100000));
+  simReset(false);
+});
 
 // ------------------------------------------------------------------ tabs
-document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
-  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${b.dataset.tab}`));
-  if (b.dataset.tab !== 'camera') stopCamera();
-}));
+const activeTab = () => document.querySelector('#tabs button.active').dataset.tab;
+function showTab(name) {
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x.dataset.tab === name));
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
+  syncCamera();
+}
+document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 // ------------------------------------------------------------------ parameters
 function buildParamForm() {
@@ -694,14 +734,56 @@ function renderDebug() {
 }
 
 // ------------------------------------------------------------------ camera tab
-function stopCamera() { $('cam-img').removeAttribute('src'); $('cam-toggle').textContent = '顯示'; }
-$('cam-toggle').addEventListener('click', () => {
-  if ($('cam-img').getAttribute('src')) { stopCamera(); return; }
-  $('cam-img').src = `${MJPEG_URL}/stream?topic=${encodeURIComponent($('cam-topic').value)}`;
-  $('cam-toggle').textContent = '關閉';
-});
-$('cam-img').addEventListener('error', () => { if ($('cam-img').getAttribute('src')) { toast('影像串流失敗', MJPEG_URL, 'err'); stopCamera(); } });
-$('cam-topic').addEventListener('change', () => { if ($('cam-img').getAttribute('src')) { stopCamera(); $('cam-toggle').click(); } });
+// One mjpeg stream per ticked topic, open only while the tab is shown; a broken stream (mjpeg_server
+// not up yet, restarting) retries every 3 s instead of raising toasts.
+const CAM_NAMES = { '/camera/black': '黑色遮罩', '/camera/red': '紅色遮罩', '/camera/image_raw': '原始影像' };
+const camViews = {};
+$('cam-note').textContent = `影像來自 mjpeg_server（${MJPEG_URL}）。`;
+
+function camWanted() {
+  if (activeTab() !== 'camera' || !document.body.classList.contains('is-camera')) return [];
+  return [...$('cam-pick').querySelectorAll('input:checked')]
+    .filter((i) => !(S.isSim && i.closest('.real-only')))        // no raw image in the simulation
+    .map((i) => i.value);
+}
+function camOpen(v) {
+  clearTimeout(v.retry);
+  v.fig.classList.remove('err');
+  v.st.textContent = '連線中…';
+  // mjpeg_server does not URL-decode: an encoded %2Fcamera%2Fblack subscribes to nothing
+  v.img.src = `${MJPEG_URL}/stream?topic=${v.topic}&t=${Date.now()}`;
+}
+function syncCamera() {
+  const want = camWanted();
+  for (const topic of Object.keys(camViews)) {
+    if (want.includes(topic)) continue;
+    const v = camViews[topic];
+    clearTimeout(v.retry);
+    v.img.removeAttribute('src');          // closes the stream
+    v.fig.remove();
+    delete camViews[topic];
+  }
+  for (const topic of want) {
+    if (camViews[topic]) continue;
+    const fig = document.createElement('figure');
+    fig.className = 'cam-view';
+    fig.innerHTML = '<img alt=""><figcaption><span class="name"></span><span class="st"></span></figcaption>';
+    const v = { topic, fig, img: fig.querySelector('img'), st: fig.querySelector('.st'), retry: null };
+    fig.querySelector('.name').textContent = `${CAM_NAMES[topic] || topic}  ${topic}`;
+    v.img.addEventListener('load', () => { v.st.textContent = ''; });
+    v.img.addEventListener('error', () => {
+      if (camViews[topic] !== v) return;                          // closed on purpose
+      fig.classList.add('err');
+      v.st.textContent = '沒有影像，3 秒後重試';
+      v.retry = setTimeout(() => camViews[topic] === v && camOpen(v), 3000);
+    });
+    camViews[topic] = v;
+    camOpen(v);
+  }
+  // keep the order of the check boxes
+  for (const i of $('cam-pick').querySelectorAll('input')) if (camViews[i.value]) $('cam-views').appendChild(camViews[i.value].fig);
+}
+$('cam-pick').addEventListener('change', syncCamera);
 
 // ------------------------------------------------------------------ map
 const canvas = $('map');

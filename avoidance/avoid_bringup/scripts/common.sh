@@ -6,6 +6,7 @@
 #   AVOID_BRIDGE_PORT  rosbridge websocket     (9090)
 #   AVOID_WEB_PORT     web UI http server      (8000)
 #   AVOID_GAZEBO_PORT  gzserver master port    (11345, simulation only)
+#   AVOID_MJPEG_PORT   mjpeg_server (camera images for the web UI, camera configuration) (8080)
 #   AVOID_ROS_IP       ROS_IP for the nodes    (127.0.0.1: everything runs on this machine; the
 #                      laptop only talks to rosbridge and the web server, which listen on all
 #                      interfaces). Set it to the robot's address to run rviz from another machine.
@@ -16,7 +17,7 @@ ROS_PORT="${AVOID_ROS_PORT:-11311}"
 BRIDGE_PORT="${AVOID_BRIDGE_PORT:-9090}"
 WEB_PORT="${AVOID_WEB_PORT:-8000}"
 GAZEBO_PORT="${AVOID_GAZEBO_PORT:-11345}"
-MJPEG_PORT=8080
+MJPEG_PORT="${AVOID_MJPEG_PORT:-8080}"
 
 if [ -t 1 ]; then
   C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BLD=$'\e[1m'; C_OFF=$'\e[0m'
@@ -63,7 +64,7 @@ export ROS_IP=${AVOID_ROS_IP:-127.0.0.1}
 export GAZEBO_MASTER_URI=http://localhost:$GAZEBO_PORT
 export AVOID_SESSION=$session
 # scripts run from a pane (avoid_stop.sh) must address this instance, not the default-port one
-export AVOID_ROS_PORT=$ROS_PORT AVOID_BRIDGE_PORT=$BRIDGE_PORT AVOID_WEB_PORT=$WEB_PORT AVOID_GAZEBO_PORT=$GAZEBO_PORT
+export AVOID_ROS_PORT=$ROS_PORT AVOID_BRIDGE_PORT=$BRIDGE_PORT AVOID_WEB_PORT=$WEB_PORT AVOID_GAZEBO_PORT=$GAZEBO_PORT AVOID_MJPEG_PORT=$MJPEG_PORT
 export PYTHONUNBUFFERED=1
 EOF
   # shellcheck disable=SC1090
@@ -156,12 +157,16 @@ tmux_window() {
   tmux send-keys -t "$session:$name" "source '$ENV_FILE'; $cmd" C-m
 }
 
+# The page assumes rosbridge on 9090 and mjpeg_server on 8080 of its own host; other ports go in
+# the URL.
 lan_urls() {
-  local ip
+  local ip q
   for ip in $(hostname -I 2>/dev/null) 127.0.0.1; do
     case "$ip" in *:*) continue ;; esac
-    if [ "$BRIDGE_PORT" = 9090 ]; then echo "    http://$ip:$WEB_PORT/"
-    else echo "    http://$ip:$WEB_PORT/?bridge=ws://$ip:$BRIDGE_PORT"; fi
+    q=
+    [ "$BRIDGE_PORT" = 9090 ] || q="$q&bridge=ws://$ip:$BRIDGE_PORT"
+    [ "$MJPEG_PORT" = 8080 ] || q="$q&mjpeg=http://$ip:$MJPEG_PORT"
+    echo "    http://$ip:$WEB_PORT/${q:+?${q#&}}"
   done
 }
 

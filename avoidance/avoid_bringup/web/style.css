@@ -47,9 +47,21 @@ main { display: flex; height: calc(100% - 48px); }
 #map-legend label { cursor: pointer; user-select: none; }
 #cursor-pos { margin-left: auto; font-variant-numeric: tabular-nums; }
 
-#side {
-  width: 380px; flex: none; background: var(--panel); border-left: 1px solid var(--line);
-  padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+/* Two columns side by side, each its own height (screens are wide, not tall): the left one keeps
+   state, start/stop and speed in view; the right one holds the tabs, whose content scrolls under
+   the tab bar. Narrow windows stack them in one scrolling column. */
+#side { flex: none; display: flex; background: var(--panel); border-left: 1px solid var(--line); min-height: 0; }
+.side-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+#side-main { width: 330px; padding: 12px; overflow-y: auto; }
+#side-tabs { width: 350px; border-left: 1px solid var(--line); }
+#side-tabs #tabs { flex: none; padding: 6px 12px 0; }
+#tab-body { flex: 1; overflow-y: auto; padding: 10px 12px 12px; }
+@media (max-width: 1250px) {
+  #side { width: 380px; flex-direction: column; overflow-y: auto; }
+  #side-main, #side-tabs { width: auto; overflow: visible; }
+  #side-main { padding-bottom: 0; }
+  #side-tabs { border-left: none; }
+  #tab-body { overflow: visible; }
 }
 #state-card { background: var(--card); border-radius: 8px; padding: 10px 12px; }
 .state-row { display: flex; align-items: baseline; justify-content: space-between; }
@@ -116,11 +128,20 @@ td:last-child { text-align: right; font-family: ui-monospace, monospace; }
 .prow input.changed { border-color: var(--warn); }
 .prow .unit { color: var(--muted); font-size: 11px; }
 
-#cam-img { width: 100%; background: #000; min-height: 120px; border-radius: 6px; }
+body.is-sim .real-only { display: none !important; }
+#cam-pick label { cursor: pointer; user-select: none; }
+#cam-views { display: flex; flex-direction: column; gap: 8px; }
+.cam-view { margin: 0; }
+.cam-view img { width: 100%; aspect-ratio: 4 / 3; display: block; background: #000; border-radius: 6px; object-fit: contain; }
+.cam-view figcaption { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; justify-content: space-between; }
+.cam-view.err figcaption .st { color: var(--bad); }
+.cam-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.cam-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
 
-#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+/* over the map's bottom-left corner, never over the controls; clicks go through */
+#toasts { position: absolute; left: 12px; bottom: 46px; display: flex; flex-direction: column; gap: 6px; z-index: 10; pointer-events: none; }
 .toast {
-  min-width: 260px; max-width: 420px; padding: 10px 14px; border-radius: 6px; background: var(--card);
+  min-width: 220px; max-width: 380px; padding: 7px 12px; border-radius: 6px; background: rgba(37, 42, 51, .92);
   border-left: 4px solid var(--ok); box-shadow: 0 4px 14px rgba(0,0,0,.4); transition: opacity .3s;
 }
 .toast.err { border-left-color: var(--bad); }
@@ -139,7 +160,7 @@ td:last-child { text-align: right; font-family: ui-monospace, monospace; }
 #speed-bar-target { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; left: 0; opacity: .8; }
 .hint-row { justify-content: space-between; margin-top: -4px; flex-wrap: nowrap; }
 #start-hint { margin-top: 0; }
-#speed-chart { width: 100%; height: 120px; display: block; }
+#speed-chart { width: 100%; height: 140px; display: block; }
 #speed-card h3 { display: flex; justify-content: space-between; }
 #limit-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); margin-top: 4px; }
 #limit-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
