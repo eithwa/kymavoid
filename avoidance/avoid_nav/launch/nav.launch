@@ -13,5 +13,7 @@
   <node if="$(eval sensor == 'lidar')" name="lidar_adapter" pkg="avoid_nav" type="lidar_adapter" output="screen"/>
   <node name="nav_node" pkg="avoid_nav" type="nav_node" output="screen">
     <param name="sensor_config" value="$(arg sensor)"/>
+    <rosparam command="load" file="$(find avoid_nav)/config/tuning_$(arg sensor).yaml"/>
+    <param name="tuning_file" value="$(find avoid_nav)/config/tuning_$(arg sensor).yaml"/>
   </node>
 </launch>

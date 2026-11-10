@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!-- Simulation: Gazebo (avoid_sim) + navigation (avoid_nav) + rosbridge for the web UI. -->
+<launch>
+  <arg name="sensor" default="camera"/>   <!-- camera | lidar -->
+  <arg name="nav" default="true"/>
+  <arg name="bridge_port" default="9090"/>
+  <arg name="gui" default="true"/>
+  <arg name="layout" default="random"/>   <!-- random | classic -->
+  <arg name="seed" default="1"/>
+  <include file="$(find avoid_sim)/launch/sim.launch">
+    <arg name="sensor" value="$(arg sensor)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="layout" value="$(arg layout)"/>
+    <arg name="seed" value="$(arg seed)"/>
+  </include>
+  <!-- nav:=false when avoid_*.sh runs nav_node in its own tmux window (restart it alone) -->
+  <include if="$(arg nav)" file="$(find avoid_nav)/launch/nav.launch">
+    <arg name="sensor" value="$(arg sensor)"/>
+  </include>
+  <!-- pings every node: crashed nodes stay registered with the master (web UI node list) -->
+  <node name="node_watch" pkg="avoid_bringup" type="node_watch.py"/>
+  <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">
+    <arg name="port" value="$(arg bridge_port)"/>
+  </include>
+</launch>

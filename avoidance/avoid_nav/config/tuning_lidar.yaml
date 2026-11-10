@@ -1,0 +1,20 @@
+# nav_node tuning (lidar configuration). Loaded into ~ by nav.launch, re-read at every start;
+# the web UI edits these on the parameter server and "save" writes this file back.
+v_max: 0.8                # [m/s]
+a_max: 1.0                # [m/s^2] acceleration
+a_brake: 1.2              # [m/s^2] braking used for v <= sqrt(2 a d_free)
+stop_margin: 0.03         # [m] stop this short of the C-space boundary
+v_tight: 0.15             # [m/s] speed with zero clearance
+v_per_clearance: 3.0      # [m/s per m] extra speed per metre of clearance
+lookahead: 0.35           # [m] (visible-target pursuit)
+k_heading: 1.5            # heading P gain
+w_max: 1.0                # [rad/s]
+safety_margin: 0.03       # [m] safety layer: footprint sweep margin
+max_obstacle_range: 6.0    # [m] obstacle readings farther than this are ignored
+red_line_max_range: 1.5   # [m] red-line fits only from closer points
+wall_max_range: 2.5       # [m] low-wall fits only from closer points (camera)
+line_margin_base: 0.02    # [m] keep-out inside the red lines ...
+line_margin_sigma: 2.0    # ... plus this x sigma_y of the localisation
+clear_margin: 0.10        # [m] beams clear the grid only up to this short of the hit
+recovery_after: 1.0       # [s] no path this long: forget obstacles beyond 1 m
+no_path_timeout: 3.0      # [s] no path this long: SAFE_STOP

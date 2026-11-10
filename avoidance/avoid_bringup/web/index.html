@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>避障控制台</title>
+<link rel="stylesheet" href="style.css">
+<script src="vendor/eventemitter2.min.js"></script>
+<script src="vendor/roslib.js"></script>
+</head>
+<body>
+<header id="statusbar">
+  <div class="brand">避障控制台 <span id="mode-tag" class="tag">—</span></div>
+  <div id="lights"></div>
+  <div class="bridge" title="rosbridge 位址；網址加上 ?bridge=ws://主機:埠 可以改">
+    <span id="bridge-url"></span>
+  </div>
+</header>
+
+<main>
+  <section id="map-panel">
+    <canvas id="map"></canvas>
+    <div id="map-legend">
+      <label><input type="checkbox" id="show-cspace"> C-space</label>
+      <label><input type="checkbox" id="show-scan" checked> 即時掃描</label>
+      <label><input type="checkbox" id="show-trail" checked> 軌跡</label>
+      <label class="sim-only"><input type="checkbox" id="show-truth" checked> 真值（模擬）</label>
+      <span id="cursor-pos"></span>
+    </div>
+  </section>
+
+  <aside id="side">
+    <div id="state-card">
+      <div class="state-row">
+        <span id="state-name" class="state">未連線</span>
+        <span id="elapsed"></span>
+      </div>
+      <div id="state-reason">等待 rosbridge 連線</div>
+      <div id="pose-line"></div>
+    </div>
+
+    <div id="controls">
+      <button id="btn-start" class="btn start" disabled>開始</button>
+      <button id="btn-stop" class="btn stop" title="任何時候都能按；空白鍵">停止<small>Space</small></button>
+    </div>
+    <div id="start-hint"></div>
+
+    <nav id="tabs">
+      <button data-tab="run" class="active">執行</button>
+      <button data-tab="params">參數</button>
+      <button data-tab="debug">除錯</button>
+      <button data-tab="camera" class="camera-only">影像</button>
+    </nav>
+
+    <div class="tab active" id="tab-run">
+      <div class="card sim-only" id="sim-card">
+        <h3>模擬場地</h3>
+        <div class="row">
+          <label>seed <input type="number" id="sim-seed" value="1" min="0" step="1"></label>
+          <button id="sim-random" class="btn small" title="隨機 seed">🎲</button>
+          <label>擺法
+            <select id="sim-layout">
+              <option value="random">隨機（規格）</option>
+              <option value="classic">原始 world</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <button id="sim-reset" class="btn">重擺場地</button>
+          <button id="sim-next" class="btn" title="seed + 1 後重擺">下一個 seed</button>
+        </div>
+        <div id="sim-info" class="muted"></div>
+      </div>
+      <div class="card">
+        <h3>節點</h3>
+        <div id="nodes"></div>
+      </div>
+      <div class="card">
+        <h3>上一輪</h3>
+        <div id="last-run" class="muted">還沒有跑過</div>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-params">
+      <div class="muted">改完按「套用」：寫到參數伺服器，<b>下一次開始時生效</b>。「存檔」寫回 <code>avoid_nav/config/tuning_&lt;感測器&gt;.yaml</code>。</div>
+      <div id="params"></div>
+      <div class="row">
+        <button id="params-reload" class="btn small">重新讀取</button>
+        <button id="params-apply" class="btn small">套用</button>
+        <button id="params-save" class="btn small">存檔</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-debug">
+      <div class="card"><h3>nav_node /avoid/debug</h3><table id="debug-table"></table></div>
+      <div class="card"><h3>topic 頻率（網頁收到的）</h3><table id="rates-table"></table></div>
+    </div>
+
+    <div class="tab" id="tab-camera">
+      <div class="row">
+        <select id="cam-topic">
+          <option value="/camera/black">黑色遮罩 /camera/black</option>
+          <option value="/camera/red">紅色遮罩 /camera/red</option>
+          <option value="/camera/image_raw">原始影像 /camera/image_raw</option>
+        </select>
+        <button id="cam-toggle" class="btn small">顯示</button>
+      </div>
+      <img id="cam-img" alt="">
+      <div class="muted">影像來自 mjpeg_server（:8080），只有實車攝影機設定才有。</div>
+    </div>
+  </aside>
+</main>
+
+<div id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>

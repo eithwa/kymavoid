@@ -32,6 +32,15 @@ public:
     nh.param("/camera/camera_high", cam_high, 654.0);
     nh.param("/camera/inner", inner, 40);
     nh.param("/camera/outer", outer, 229);
+    // On the real robot black_item's own parameters (vision config) are the truth: the distances
+    // it publishes were computed with them, so the inner-ring value must match exactly.
+    if (nh.hasParam("/FIRA/vision/Center/Inner"))
+    {
+      nh.getParam("/FIRA/vision/Center/Camera_high", cam_high);
+      nh.getParam("/FIRA/vision/Center/Inner", inner);
+      nh.getParam("/FIRA/vision/Center/Outer", outer);
+      ROS_INFO("camera_adapter: using black_item's mirror parameters (/FIRA/vision/Center)");
+    }
     std::vector<double> struts;
     nh.param("/camera/strut_angles_deg", struts, std::vector<double>());
     pnh.param("strut_mask_half_deg", strut_half_deg_, 2.0);

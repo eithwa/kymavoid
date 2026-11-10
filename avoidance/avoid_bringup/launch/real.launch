@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<!-- Real robot. NOT TESTED ON THE ROBOT YET (no hardware during development).
+     sensor:=camera  prosilica + vision/black_item + camera_adapter (+ mjpeg for the web UI)
+     sensor:=lidar   three Hokuyo (urg_node) + lidar_adapter; the camera is NOT started
+     Always: motion, IMU, motion_adapter (uncalibrated scales!), nav_node, rosbridge.
+     Config files are git-ignored; avoid_real.sh copies them from the "(default)" templates. -->
+<launch>
+  <arg name="sensor" default="camera"/>
+  <arg name="nav" default="true"/>
+  <arg name="bridge_port" default="9090"/>
+  <arg name="lidar_mount_r" default="0.15"/>    <!-- guess, measure on the robot (docs 2.3) -->
+  <arg name="lidar_port_0" default="/dev/ttyACM0"/>   <!-- straight back -->
+  <arg name="lidar_port_1" default="/dev/ttyACM1"/>   <!-- front left (+60 deg) -->
+  <arg name="lidar_port_2" default="/dev/ttyACM2"/>   <!-- front right (-60 deg) -->
+
+  <!-- camera configuration: the same vision nodes and parameters as the old AvoidChallenge.launch -->
+  <group if="$(eval sensor == 'camera')">
+    <rosparam command="load" file="$(find fira_launch)/default_config/AvoidChallenge.yaml"/>
+    <rosparam command="load" ns="prosilica_driver" file="$(find vision)/config/prosilica_driver.yaml"/>
+    <node name="prosilica_driver" pkg="prosilica_camera" type="prosilica_node" respawn="true" respawn_delay="5" output="screen"/>
+    <node name="black_item" pkg="vision" type="black_item" respawn="true" respawn_delay="1"/>
+    <node name="mjpeg_server" pkg="mjpeg_server" type="mjpeg_server" respawn="true" respawn_delay="5"/>
+  </group>
+
+  <!-- lidar configuration -->
+  <group if="$(eval sensor == 'lidar')">
+    <node name="laser_0" pkg="urg_node" type="urg_node" respawn="true" respawn_delay="2">
+      <param name="serial_port" value="$(arg lidar_port_0)"/>
+      <param name="frame_id" value="laser_0"/>
+      <remap from="scan" to="scan_0"/>
+    </node>
+    <node name="laser_1" pkg="urg_node" type="urg_node" respawn="true" respawn_delay="2">
+      <param name="serial_port" value="$(arg lidar_port_1)"/>
+      <param name="frame_id" value="laser_1"/>
+      <remap from="scan" to="scan_1"/>
+    </node>
+    <node name="laser_2" pkg="urg_node" type="urg_node" respawn="true" respawn_delay="2">
+      <param name="serial_port" value="$(arg lidar_port_2)"/>
+      <param name="frame_id" value="laser_2"/>
+      <remap from="scan" to="scan_2"/>
+    </node>
+  </group>
+
+  <!-- base_footprint -> base_link -> laser_i from the same URDF the simulation uses (one source for
+       the mounting geometry) -->
+  <param name="robot_description" command="$(find xacro)/xacro $(find avoid_sim)/urdf/avoid_robot.urdf.xacro
+         sensor:=$(arg sensor) lidar_mount_r:=$(arg lidar_mount_r)"/>
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
+
+  <!-- base: motors, IMU and the bridge to REP 103 topics -->
+  <node name="motion" pkg="motion" type="Attack_motion_node" respawn="true" respawn_delay="5"/>
+  <node name="imu_3d" pkg="imu_3d" type="imu_3d" respawn="true" respawn_delay="2"/>
+  <node name="motion_adapter" pkg="avoid_nav" type="motion_adapter.py" output="screen"/>
+
+  <!-- nav:=false when avoid_*.sh runs nav_node in its own tmux window (restart it alone) -->
+  <include if="$(arg nav)" file="$(find avoid_nav)/launch/nav.launch">
+    <arg name="sensor" value="$(arg sensor)"/>
+  </include>
+  <!-- pings every node: crashed nodes stay registered with the master (web UI node list) -->
+  <node name="node_watch" pkg="avoid_bringup" type="node_watch.py"/>
+  <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">
+    <arg name="port" value="$(arg bridge_port)"/>
+  </include>
+</launch>

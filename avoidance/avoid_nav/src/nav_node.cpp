@@ -29,6 +29,8 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <deque>
@@ -75,12 +77,13 @@ struct Input
 class NavNode
 {
 public:
-  NavNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
+  NavNode(ros::NodeHandle& nh, ros::NodeHandle& pnh) : pnh_(pnh)
   {
     pnh.param("sensor_config", sensor_, std::string("camera"));
     pnh.param("rate", rate_, 20.0);
     pnh.param("plan_rate", plan_rate_, 10.0);
     pnh.param("mapping_duration", mapping_duration_, 1.0);
+    pnh.param("max_imu_step", max_imu_step_, 0.3);   // [rad] per odometry message; more is a jump
     double t_obs, t_odom, t_imu, t_bound;
     pnh.param("timeout_obstacles", t_obs, 0.3);
     pnh.param("timeout_odom", t_odom, 0.2);
@@ -90,28 +93,9 @@ public:
     odom_ = {"odom", t_odom, true, ros::Time()};
     imu_ = {"imu", t_imu, true, ros::Time()};
     boundary_ = {"boundary", t_bound, false, ros::Time()};
-    // control
-    pnh.param("v_max", v_max_, 0.8);
-    pnh.param("a_max", a_max_, 1.0);
-    pnh.param("a_brake", a_brake_, 1.2);
-    pnh.param("stop_margin", stop_margin_, 0.03);
-    pnh.param("v_tight", v_tight_, 0.15);          // speed with zero clearance
-    pnh.param("v_per_clearance", v_per_clear_, 3.0);  // + this x clearance [m/s per m]
-    pnh.param("lookahead", lookahead_, 0.35);
-    pnh.param("k_heading", k_heading_, 1.5);
-    pnh.param("w_max", w_max_, 1.0);
-    pnh.param("safety_margin", safety_margin_, 0.03);
-    pnh.param("red_line_max_range", red_max_range_, 1.5);  // real images: red lines unreliable beyond ~1 m
-    pnh.param("wall_max_range", wall_max_range_, 2.5);
-    pnh.param("max_obstacle_range", max_obs_range_, sensor_ == "camera" ? 2.5 : 6.0);
-    pnh.param("line_margin_base", line_margin_base_, 0.02);
-    pnh.param("line_margin_sigma", line_margin_sigma_, 2.0);
-    pnh.param("no_path_timeout", no_path_timeout_, 3.0);
-    pnh.param("clear_margin", clear_margin_, 0.10);
-    OccParams op;
-    op.clear_margin = clear_margin_;
-    grid_ = OccGrid(op);
-    pnh.param("recovery_after", recovery_after_, 1.0);
+    // control and perception tuning: re-read at every start, editable from the web UI
+    pnh.param("tuning_file", tuning_file_, std::string());
+    loadTuning();
 
     // field + robot
     LocalizerParams lp;
@@ -177,6 +161,105 @@ private:
   }
   bool active() const { return state_ == MAPPING || state_ == RUNNING || state_ == FINISHED; }
 
+  // ---------------------------------------------------------------- tuning
+  struct Tune
+  {
+    const char* name;
+    double NavNode::*field;
+    double def;
+  };
+  static const std::vector<Tune>& tunables()
+  {
+    static const std::vector<Tune> t = {
+        {"v_max", &NavNode::v_max_, 0.8},
+        {"a_max", &NavNode::a_max_, 1.0},
+        {"a_brake", &NavNode::a_brake_, 1.2},
+        {"stop_margin", &NavNode::stop_margin_, 0.03},
+        {"v_tight", &NavNode::v_tight_, 0.15},             // speed with zero clearance
+        {"v_per_clearance", &NavNode::v_per_clear_, 3.0},  // + this x clearance [m/s per m]
+        {"lookahead", &NavNode::lookahead_, 0.35},
+        {"k_heading", &NavNode::k_heading_, 1.5},
+        {"w_max", &NavNode::w_max_, 1.0},
+        {"safety_margin", &NavNode::safety_margin_, 0.03},
+        {"max_obstacle_range", &NavNode::max_obs_range_, -1},   // default depends on the sensor
+        {"red_line_max_range", &NavNode::red_max_range_, 1.5},  // real images: red lines unreliable beyond ~1 m
+        {"wall_max_range", &NavNode::wall_max_range_, 2.5},
+        {"line_margin_base", &NavNode::line_margin_base_, 0.02},
+        {"line_margin_sigma", &NavNode::line_margin_sigma_, 2.0},
+        {"clear_margin", &NavNode::clear_margin_, 0.10},
+        {"recovery_after", &NavNode::recovery_after_, 1.0},
+        {"no_path_timeout", &NavNode::no_path_timeout_, 3.0},
+    };
+    return t;
+  }
+
+  void loadTuning()
+  {
+    for (const Tune& t : tunables())
+      pnh_.param(t.name, this->*t.field, t.def >= 0 ? t.def : (sensor_ == "camera" ? 2.5 : 6.0));
+    OccParams op;
+    op.clear_margin = clear_margin_;
+    grid_ = OccGrid(op);
+  }
+
+  // Write the current parameter-server values (what the next start will use) back to the tuning
+  // file: values are replaced in place, comments and order are kept, missing keys are appended.
+  bool saveTuning(std::string& msg)
+  {
+    if (tuning_file_.empty())
+    {
+      msg = "no ~tuning_file configured";
+      return false;
+    }
+    std::vector<std::string> lines;
+    {
+      std::ifstream in(tuning_file_);
+      for (std::string l; std::getline(in, l);)
+        lines.push_back(l);
+    }
+    auto number = [&](const Tune& t) {
+      double v = this->*t.field;
+      pnh_.getParam(t.name, v);
+      return v;
+    };
+    auto value = [&](const Tune& t) {
+      std::ostringstream os;
+      os << number(t);
+      return os.str();
+    };
+    for (const Tune& t : tunables())
+    {
+      const std::string key = std::string(t.name) + ":";
+      bool found = false;
+      for (std::string& l : lines)
+        if (l.compare(0, key.size(), key) == 0)
+        {
+          found = true;
+          char* end = nullptr;
+          const double old = std::strtod(l.c_str() + key.size(), &end);
+          if (end != l.c_str() + key.size() && std::fabs(old - number(t)) < 1e-12)
+            continue;                                   // unchanged: keep the line as written
+          const size_t hash = l.find('#');
+          std::string v = key + " " + value(t);
+          if (hash != std::string::npos)
+            v += std::string(std::max<size_t>(1, hash > v.size() ? hash - v.size() : 1), ' ') + l.substr(hash);
+          l = v;
+        }
+      if (!found)
+        lines.push_back(key + " " + value(t));
+    }
+    std::ofstream f(tuning_file_);
+    for (const std::string& l : lines)
+      f << l << "\n";
+    if (!f)
+    {
+      msg = "cannot write " + tuning_file_;
+      return false;
+    }
+    msg = "saved to " + tuning_file_;
+    return true;
+  }
+
   // ---------------------------------------------------------------- inputs
   void onImu(const std_msgs::Float64& m)
   {
@@ -200,7 +283,15 @@ private:
       if (dt > 0 && dt < 0.5)
       {
         const double vx = m.twist.twist.linear.x, vy = m.twist.twist.linear.y;
-        const double dth = wrapAngle(imu_yaw_ - imu_at_last_odom_);
+        double dth = wrapAngle(imu_yaw_ - imu_at_last_odom_);
+        if (std::fabs(dth) > max_imu_step_)
+        {
+          // an IMU jump (re-zeroed / glitch; the simulator re-draws the IMU offset at a field reset),
+          // not a rotation: keep the heading continuous
+          imu0_ = wrapAngle(imu0_ + dth);
+          ROS_WARN("nav_node: IMU jumped %.1f deg between two odometry messages, ignored", dth * 180 / M_PI);
+          dth = 0;
+        }
         // dead reckoning (local frame): heading straight from the IMU, odometry scale as estimated
         // by the EKF (changes smoothly, so the local frame never jumps)
         const double th = wrapAngle(start_.th + imu_yaw_ - imu0_);
@@ -333,6 +424,7 @@ private:
         res.message = "cannot start, stale inputs: " + stale;
         return true;
       }
+      loadTuning();                                   // picks up parameters changed from the web UI
       // the robot stands on the start pose: (re)anchor everything there
       loc_.reset(start_.x, start_.y, start_.th);
       local_ = start_;
@@ -350,10 +442,15 @@ private:
       setState(IDLE, "stopped by command");
     else if (req.command == "reset")
       setState(IDLE, "reset");
+    else if (req.command == "save")
+    {
+      res.success = saveTuning(res.message);
+      return true;
+    }
     else
     {
       res.success = false;
-      res.message = "unknown command '" + req.command + "' (start | stop | reset)";
+      res.message = "unknown command '" + req.command + "' (start | stop | reset | save)";
       return true;
     }
     res.success = true;
@@ -733,8 +830,9 @@ private:
   }
 
   // parameters
-  std::string sensor_, reason_;
-  double rate_ = 20, plan_rate_ = 10, mapping_duration_ = 1;
+  ros::NodeHandle pnh_;
+  std::string sensor_, reason_, tuning_file_;
+  double rate_ = 20, plan_rate_ = 10, mapping_duration_ = 1, max_imu_step_ = 0.3;
   double v_max_, a_max_, a_brake_, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
   double safety_margin_, max_obs_range_, line_margin_base_, line_margin_sigma_, no_path_timeout_;
   double clear_margin_ = 0.10, recovery_after_ = 1.0;

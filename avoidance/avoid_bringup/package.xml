@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>avoid_bringup</name>
+  <version>0.1.0</version>
+  <description>One-command start-up (tmux) and the web UI for the avoidance challenge, real robot and simulation.</description>
+  <maintainer email="mike@todo.todo">mike</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>avoid_msgs</exec_depend>
+  <exec_depend>avoid_nav</exec_depend>
+  <exec_depend>avoid_sim</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>rosapi</exec_depend>
+  <exec_depend>rosgraph</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+</package>
