@@ -2,7 +2,8 @@
 # Stops avoid_sim / avoid_real: Ctrl-C to every pane (roslaunch shuts its nodes down cleanly),
 # then the tmux session, then whatever the session started that is still alive.
 #
-#   avoid_stop.sh [--quiet] [session ...]     (default: avoid_sim avoid_real)
+#   avoid_stop.sh [--quiet] [session ...]     (default: avoid_sim and avoid_real of this ROS port)
+# Only the instance(s) of the current ROS master port (AVOID_ROS_PORT, default 11311) are touched.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 QUIET=0 SESSIONS=()
@@ -13,7 +14,7 @@ for a in "$@"; do
     *) SESSIONS+=("$a") ;;
   esac
 done
-[ ${#SESSIONS[@]} -gt 0 ] || SESSIONS=(avoid_sim avoid_real)
+[ ${#SESSIONS[@]} -gt 0 ] || SESSIONS=("$(instance avoid_sim)" "$(instance avoid_real)")
 
 # Run from a pane of the session being stopped: killing the session would kill this script too,
 # so finish the job detached.

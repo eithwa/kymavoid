@@ -9,7 +9,6 @@
 set -e
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-SESSION=avoid_real
 SENSOR= NO_ATTACH=${NO_ATTACH:-0}
 CAMERA_IP=192.168.16.100
 while [ $# -gt 0 ]; do
@@ -24,8 +23,9 @@ done
 [ -n "$SENSOR" ] || fail "choose the sensor configuration: avoid_real.sh camera|lidar"
 
 command -v tmux >/dev/null || fail "tmux is not installed (sudo apt install tmux)"
+SESSION="$(instance avoid_real)"
 [ -z "$AVOID_SESSION" ] || fail "this terminal belongs to the running '$AVOID_SESSION' session: run this from another terminal"
-"$BRINGUP_DIR/scripts/avoid_stop.sh" --quiet "$SESSION" avoid_sim
+"$BRINGUP_DIR/scripts/avoid_stop.sh" --quiet "$SESSION" "$(instance avoid_sim)"
 make_env "$SESSION"
 check_pkgs avoid_bringup avoid_nav avoid_sim motion imu_3d rosbridge_server robot_state_publisher xacro
 EXTRA_ARGS=

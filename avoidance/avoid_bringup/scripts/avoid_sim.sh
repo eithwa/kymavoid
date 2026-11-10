@@ -6,7 +6,6 @@
 set -e
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-SESSION=avoid_sim
 SENSOR=camera GUI=true SEED=1 LAYOUT=random NO_ATTACH=${NO_ATTACH:-0}
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -22,8 +21,9 @@ while [ $# -gt 0 ]; do
 done
 
 command -v tmux >/dev/null || fail "tmux is not installed (sudo apt install tmux)"
+SESSION="$(instance avoid_sim)"
 [ -z "$AVOID_SESSION" ] || fail "this terminal belongs to the running '$AVOID_SESSION' session: run this from another terminal"
-"$BRINGUP_DIR/scripts/avoid_stop.sh" --quiet "$SESSION" avoid_real
+"$BRINGUP_DIR/scripts/avoid_stop.sh" --quiet "$SESSION" "$(instance avoid_real)"
 make_env "$SESSION"
 check_pkgs avoid_bringup avoid_sim avoid_nav gazebo_ros rosbridge_server
 check_ports "$ROS_PORT" "$BRIDGE_PORT" "$WEB_PORT" "$GAZEBO_PORT"

@@ -62,12 +62,19 @@ unset ROS_HOSTNAME
 export ROS_IP=${AVOID_ROS_IP:-127.0.0.1}
 export GAZEBO_MASTER_URI=http://localhost:$GAZEBO_PORT
 export AVOID_SESSION=$session
+# scripts run from a pane (avoid_stop.sh) must address this instance, not the default-port one
+export AVOID_ROS_PORT=$ROS_PORT AVOID_BRIDGE_PORT=$BRIDGE_PORT AVOID_WEB_PORT=$WEB_PORT AVOID_GAZEBO_PORT=$GAZEBO_PORT
 export PYTHONUNBUFFERED=1
 EOF
   # shellcheck disable=SC1090
   source "$ENV_FILE"
   info "workspace $ws, ROS_MASTER_URI=$ROS_MASTER_URI, ROS_IP=$ROS_IP"
 }
+
+# One instance per ROS master port. Its tmux session, its process marker (AVOID_SESSION) and its
+# environment file all carry this name, so instances on other ports (a test copy next to a running
+# simulation) never touch each other: avoid_sim on the default port, avoid_sim-11313 on 11313.
+instance() { if [ "$ROS_PORT" = 11311 ]; then echo "$1"; else echo "$1-$ROS_PORT"; fi; }
 
 port_busy() { ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
 
@@ -176,7 +183,9 @@ start_session() {
   info "${C_BLD}tmux session '$session' is up${C_OFF} (windows: core nav web monitor shell)"
   info "web UI:"
   lan_urls
-  info "attach: tmux attach -t $session      stop: $BRINGUP_DIR/scripts/avoid_stop.sh"
+  local envp=""
+  [ "$ROS_PORT" = 11311 ] || envp="AVOID_ROS_PORT=$ROS_PORT "
+  info "attach: tmux attach -t $session      stop: $envp$BRINGUP_DIR/scripts/avoid_stop.sh"
 }
 
 attach_session() {

@@ -89,7 +89,10 @@ rosrun avoid_bringup web_server.py 8000
 
 ```bash
 AVOID_ROS_PORT=11313 AVOID_BRIDGE_PORT=9093 AVOID_WEB_PORT=8003 AVOID_GAZEBO_PORT=11347 scripts/avoid_sim.sh
+AVOID_ROS_PORT=11313 scripts/avoid_stop.sh          # 只停 11313 這一組
 ```
+
+每個 ROS port 是一個獨立的實例：預設 port 叫 `avoid_sim`，其他 port 叫 `avoid_sim-<port>`。tmux session、行程標記、環境檔都分開，所以停其中一組，不會停到另一組。
 
 ## 實車部分尚未驗證
 
