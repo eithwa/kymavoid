@@ -132,6 +132,8 @@ def check(case, row):
         out.append('obstacle gap %.3f m < %.3f m' % (row['min_obstacle'], e['min_obstacle']))
     if 'min_line' in e and row['min_line'] < e['min_line']:
         out.append('line gap %.3f m < %.3f m' % (row['min_line'], e['min_line']))
+    if row.get('min_wall', 9.0) <= 0:
+        out.append('hit the low wall after the goal line')
     return out
 
 
@@ -285,15 +287,27 @@ class Evaluator:
                 break
             rate.sleep()
         elapsed = rospy.get_time() - t0
+        # After the goal line nav_node brakes by itself: it must stop before the low wall behind it.
+        # (Sending 'stop' right away - as before - stops the simulated robot dead and hides that.)
+        min_wall = 9.0
+        if tr.result == 'success':
+            wall_in = self.f.wall_x - self.f.wall_thickness / 2
+            t1 = rospy.get_time()
+            while not rospy.is_shutdown() and rospy.get_time() - t1 < 2.0:
+                x, y, yaw = self.truth['p']
+                min_wall = min(min_wall, wall_in - footprint_world(self.fp, x, y, yaw)[:, 0].max())
+                rate.sleep()
         self.command('stop')
         le = np.array(tr.loc_err) if tr.loc_err else np.zeros((1, 3))
         row = dict(result=tr.result, time=round(elapsed, 2), mean_speed=round(path_len / max(elapsed, 1e-6), 3),
-                   min_obstacle=round(tr.min_obs, 3), min_line=round(tr.min_line, 3), end_err_x=round(le[-1, 0], 3),
+                   min_obstacle=round(tr.min_obs, 3), min_line=round(tr.min_line, 3), min_wall=round(min_wall, 3),
+                   end_err_x=round(le[-1, 0], 3),
                    max_err_x=round(np.abs(le[:, 0]).max(), 3), max_err_y=round(np.abs(le[:, 1]).max(), 3),
                    max_err_yaw=round(np.abs(le[:, 2]).max(), 2),
                    start_x=round(r.start.x, 3), start_y=round(r.start.y, 3), start_yaw=round(math.degrees(r.start.theta), 2))
-        print('%s  %-10s %5.1f s  %.2f m/s  min gap obstacle %.3f m  line %.3f m | x err at end %+.3f (max %.3f)  max y err %.3f  max yaw err %.2f deg'
-              % (label, tr.result[:10], elapsed, row['mean_speed'], tr.min_obs, tr.min_line, row['end_err_x'], row['max_err_x'],
+        print('%s  %-10s %5.1f s  %.2f m/s  min gap obstacle %.3f m  line %.3f m  wall after goal %s | x err at end %+.3f (max %.3f)  max y err %.3f  max yaw err %.2f deg'
+              % (label, tr.result[:10], elapsed, row['mean_speed'], tr.min_obs, tr.min_line,
+                 ('%.3f m' % min_wall) if min_wall < 9 else '-', row['end_err_x'], row['max_err_x'],
                  row['max_err_y'], row['max_err_yaw']))
         sys.stdout.flush()
         return row
@@ -316,6 +330,8 @@ def summary(rows, csv_path):
               % (np.mean([r['time'] for r in ok]), min(r['time'] for r in ok), max(r['time'] for r in ok),
                  min(r['min_obstacle'] for r in ok), min(r['min_line'] for r in ok),
                  max(abs(r['end_err_x']) for r in ok), max(r['max_err_y'] for r in ok)), end='')
+        hit = [r for r in ok if r.get('min_wall', 9.0) <= 0]
+        print(' | wall after goal: min %.3f m, %d hit' % (min(r.get('min_wall', 9.0) for r in ok), len(hit)), end='')
     print()
     fails = {}
     for r in rows:
