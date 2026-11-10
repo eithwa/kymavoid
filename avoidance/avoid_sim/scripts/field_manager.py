@@ -9,6 +9,7 @@ save_case: append the current field to a case file in avoid_sim/cases (avoid_sim
 """
 import math
 import os
+import time
 
 import numpy as np
 import rospkg
@@ -25,6 +26,7 @@ from avoid_sim import cases
 from avoid_sim.geometry import CLASSIC_LAYOUT, Field, layout_violations, load_footprint, sample_layout, ConfigSpace
 
 ROBOT = 'avoid_robot'
+GUI_POSE_SPACING = 0.05   # [s] wall time before each model placement (Gazebo's pose/info is limited to 60 Hz)
 
 BOX_SDF = """<sdf version="1.6"><model name="{name}"><static>true</static><link name="link">
 <pose>0 0 {hz} 0 0 0</pose>
@@ -117,7 +119,14 @@ class FieldManager:
         self.pause()
         try:
             for n, (x, y) in zip(self.names, layout + parked):
+                # Gazebo tells its GUI about a moved model on ~/pose/info, throttled to 60 Hz: a pose
+                # published within 1/60 s of the previous one (the robot's while running, or the box
+                # before) is dropped, and a static box is never re-sent, so gzclient kept drawing 2-3
+                # boxes where the previous layout had them (physics was right). Wait before every
+                # placement, also the first. Wall clock: simulation time is paused here.
+                time.sleep(GUI_POSE_SPACING)
                 self.place(n, x, y)
+            time.sleep(GUI_POSE_SPACING)
             self.place(ROBOT, sx, sy, syaw, 0.01)
         finally:
             self.unpause()
