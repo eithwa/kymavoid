@@ -26,6 +26,7 @@ const TUNABLES = [
   ]],
   ['路徑追蹤', [
     ['lookahead', '前視距離', 'm', 0.05],
+    ['route_keep', '路線遲滯（成本倍數）', '×', 0.05],
     ['k_heading', '航向增益', '', 0.1],
     ['w_max', '最大角速度', 'rad/s', 0.1],
   ]],
@@ -33,6 +34,7 @@ const TUNABLES = [
     ['safety_margin', '安全層掃掠餘量', 'm', 0.01],
     ['line_margin_base', '紅線內縮', 'm', 0.01],
     ['line_margin_sigma', '紅線內縮 × σy', '', 0.5],
+    ['wall_margin', '矮牆餘量', 'm', 0.01],
     ['recovery_after', '無路徑→清地圖', 's', 0.5],
     ['no_path_timeout', '無路徑→停車', 's', 0.5],
   ]],

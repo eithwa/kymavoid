@@ -87,14 +87,28 @@ double pathCapLimit(const std::vector<Pt>& path, size_t seg, const Pt& from, Cap
   return best;
 }
 
+// Turning late, from the corner on, the arc of radius v^2 / a carries the robot R sin(theta) further
+// along its incoming direction (R beyond 90 deg): that must fit in the free room ahead of the corner.
+// The corner speed above only looked at cutting the corner on the inside; a 51 deg turn 37 cm short
+// of a box face was taken at 0.9 m/s (this allows 0.69) and the robot ran into the face.
+inline double overshootSpeed(double theta, double room, double a)
+{
+  theta = std::min(std::fabs(theta), M_PI / 2);
+  if (theta < 1e-4)
+    return std::numeric_limits<double>::infinity();
+  return std::sqrt(a * std::max(0.0, room) / std::sin(theta));
+}
+
 // Corners of a polyline path ahead of the robot. The robot stands at `from`, on segment
 // path[seg] -> path[seg + 1]. Vertices closer than `merge` to the previous one are one corner (the
 // smoothed A* path turns round a tight spot in several short steps). For every corner within
-// `horizon`, the corner speed (cut = its clearance, at least min_cut) and the braking towards it give
-// a limit on the speed now; the lowest is returned, with the distance to that corner in *at.
-template <class Clearance>
-double pathCornerLimit(const std::vector<Pt>& path, size_t seg, const Pt& from, Clearance clearance, double a_turn,
-                       double a_brake, double t_react, double min_cut, double horizon, double merge = 0.15,
+// `horizon`, the corner speed (cut = its clearance, at least min_cut; and the overshoot into
+// room(k, ux, uy), the free distance from vertex k along the incoming direction) and the braking
+// towards it give a limit on the speed now; the lowest is returned, with the distance to that corner
+// in *at.
+template <class Clearance, class Room>
+double pathCornerLimit(const std::vector<Pt>& path, size_t seg, const Pt& from, Clearance clearance, Room room,
+                       double a_turn, double a_brake, double t_react, double min_cut, double horizon, double merge = 0.15,
                        double* at = nullptr)
 {
   double best = std::numeric_limits<double>::infinity();
@@ -120,7 +134,10 @@ double pathCornerLimit(const std::vector<Pt>& path, size_t seg, const Pt& from, 
       if (j + 1 >= path.size() || len >= merge)
         break;
     }
-    const double v = approachSpeed(s_corner, a_brake, t_react, cornerSpeed(turn, std::max(min_cut, cut), a_turn));
+    const double h_in = heading(k - 1);
+    const double v_c = std::min(cornerSpeed(turn, std::max(min_cut, cut), a_turn),
+                                overshootSpeed(turn, room(k, std::cos(h_in), std::sin(h_in)), a_turn));
+    const double v = approachSpeed(s_corner, a_brake, t_react, v_c);
     if (v < best)
     {
       best = v;

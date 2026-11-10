@@ -67,21 +67,41 @@ TEST(SpeedLimits, DistanceToBounds)
 TEST(SpeedLimits, PathCornerLimitBrakesForTheCornerAhead)
 {
   const auto clear = [](size_t) { return 0.05; };
+  const auto open = [](size_t, double, double) { return 3.0; };
   // straight: no limit
   const std::vector<Pt> straight{{0, 0}, {1, 0}, {3, 0}};
-  EXPECT_EQ(pathCornerLimit(straight, 0, {0, 0}, clear, 1.0, 1.2, 0.1, 0.02, 5.0), INF);
+  EXPECT_EQ(pathCornerLimit(straight, 0, {0, 0}, clear, open, 1.0, 1.2, 0.1, 0.02, 5.0), INF);
   // 90 deg corner 1.0 m ahead
   const std::vector<Pt> ell{{0, 0}, {1, 0}, {1, 1}};
   double at = 0;
-  const double v = pathCornerLimit(ell, 0, {0, 0}, clear, 1.0, 1.2, 0.1, 0.02, 5.0, 0.15, &at);
+  const double v = pathCornerLimit(ell, 0, {0, 0}, clear, open, 1.0, 1.2, 0.1, 0.02, 5.0, 0.15, &at);
   EXPECT_NEAR(at, 1.0, 1e-9);
   EXPECT_NEAR(v, approachSpeed(1.0, 1.2, 0.1, cornerSpeed(M_PI / 2, 0.05, 1.0)), 1e-9);
   // from half way along the first leg the corner is 0.5 m away: lower
-  EXPECT_LT(pathCornerLimit(ell, 0, {0.5, 0}, clear, 1.0, 1.2, 0.1, 0.02, 5.0), v);
+  EXPECT_LT(pathCornerLimit(ell, 0, {0.5, 0}, clear, open, 1.0, 1.2, 0.1, 0.02, 5.0), v);
   // beyond the horizon: ignored
-  EXPECT_EQ(pathCornerLimit(ell, 0, {0, 0}, clear, 1.0, 1.2, 0.1, 0.02, 0.5), INF);
+  EXPECT_EQ(pathCornerLimit(ell, 0, {0, 0}, clear, open, 1.0, 1.2, 0.1, 0.02, 0.5), INF);
   // the clearance below min_cut does not stop the robot dead
-  EXPECT_GT(pathCornerLimit(ell, 0, {0.9, 0}, [](size_t) { return 0.0; }, 1.0, 1.2, 0.1, 0.02, 5.0), 0.0);
+  EXPECT_GT(pathCornerLimit(ell, 0, {0.9, 0}, [](size_t) { return 0.0; }, open, 1.0, 1.2, 0.1, 0.02, 5.0), 0.0);
+}
+
+TEST(SpeedLimits, OvershootIntoAFaceAhead)
+{
+  // 51 deg turn with a box face 0.375 m beyond the corner (seed 16): sqrt(1.0 * 0.375 / sin 51 deg)
+  EXPECT_NEAR(overshootSpeed(51 * M_PI / 180, 0.375, 1.0), 0.6947, 1e-3);
+  EXPECT_NEAR(overshootSpeed(M_PI, 0.25, 1.0), 0.5, 1e-9);          // beyond 90 deg: R itself
+  EXPECT_EQ(overshootSpeed(0.0, 0.1, 1.0), INF);
+  // the same corner, wide on the inside, with and without a face ahead
+  const std::vector<Pt> p{{0, 0}, {1, 0}, {1.6, 0.74}};
+  const auto clear = [](size_t) { return 0.22; };
+  const auto open = [](size_t, double, double) { return 3.0; };
+  const auto face = [](size_t, double ux, double) { return ux > 0.99 ? 0.375 : 3.0; };
+  const double v_open = pathCornerLimit(p, 0, {0.9, 0}, clear, open, 1.0, 1.2, 0.0, 0.02, 5.0);
+  const double v_face = pathCornerLimit(p, 0, {0.9, 0}, clear, face, 1.0, 1.2, 0.0, 0.02, 5.0);
+  EXPECT_GT(v_open, 1.3);                                              // the cut alone allows ~1.4 m/s
+  // 0.1 m before the corner: brake down to the overshoot speed by then
+  EXPECT_NEAR(v_face, approachSpeed(0.1, 1.2, 0.0, overshootSpeed(std::atan2(0.74, 0.6), 0.375, 1.0)), 1e-6);
+  EXPECT_LT(v_face, 0.9);
 }
 
 TEST(SpeedLimits, ShortStepsAreOneCorner)
@@ -96,7 +116,8 @@ TEST(SpeedLimits, ShortStepsAreOneCorner)
   }
   p.push_back({p.back().x, p.back().y + 1.0});
   const auto clear = [](size_t) { return 0.05; };
-  const double v = pathCornerLimit(p, 0, {0, 0}, clear, 1.0, 1.2, 0.0, 0.02, 5.0);
+  const auto open = [](size_t, double, double) { return 3.0; };
+  const double v = pathCornerLimit(p, 0, {0, 0}, clear, open, 1.0, 1.2, 0.0, 0.02, 5.0);
   EXPECT_NEAR(v, approachSpeed(1.0, 1.2, 0.0, cornerSpeed(M_PI / 2, 0.05, 1.0)), 1e-9);
   EXPECT_LT(v, approachSpeed(1.0, 1.2, 0.0, cornerSpeed(M_PI / 6, 0.05, 1.0)));
 }

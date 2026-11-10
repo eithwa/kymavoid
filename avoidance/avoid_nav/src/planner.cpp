@@ -39,7 +39,7 @@ void GridPlanner::build(const std::vector<Pt>& obstacles, double theta, const Ke
     if (cell(q.x, q.y, r, c))
       occ_.at<uint8_t>(r, c) = 1;
   }
-  const int infl = static_cast<int>(std::lround(p_.obstacle_inflation / p_.res));
+  const int infl = static_cast<int>(std::lround(std::min(p_.hard_inflation, p_.obstacle_inflation) / p_.res));
   if (infl > 0)
     cv::dilate(occ_, occ_, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * infl + 1, 2 * infl + 1)));
 
@@ -70,11 +70,18 @@ void GridPlanner::build(const std::vector<Pt>& obstacles, double theta, const Ke
     pts.emplace_back(static_cast<int>(std::lround((c * q.x - s * q.y) / p_.res)) + half,
                      static_cast<int>(std::lround((s * q.x + c * q.y) / p_.res)) + half);
   cv::fillPoly(kernel, std::vector<std::vector<cv::Point>>{pts}, cv::Scalar(1));
-  cv::dilate(occ_, cspace_, kernel, cv::Point(half, half), 1, cv::BORDER_CONSTANT, cv::Scalar(0));
+  cv::dilate(occ_, hard_, kernel, cv::Point(half, half), 1, cv::BORDER_CONSTANT, cv::Scalar(0));
 
-  cv::Mat freemask = (cspace_ == 0);
-  cv::distanceTransform(freemask, dist_, cv::DIST_L2, 3);
-  dist_ *= p_.res;
+  // soft C-space = hard C-space grown by the band (Minkowski sums commute: inflating the obstacles
+  // first and then dilating by the footprint is the same as growing the C-space)
+  cv::Mat freemask = (hard_ == 0);
+  cv::Mat dist_hard;
+  cv::distanceTransform(freemask, dist_hard, cv::DIST_L2, 3);
+  dist_hard *= p_.res;                                     // the first free ring is one cell (res) away
+  const float band = static_cast<float>(std::max(0.0, p_.obstacle_inflation - p_.hard_inflation));
+  cspace_ = (dist_hard < band + 0.5f * static_cast<float>(p_.res)) / 255;   // CV_8U 0/1
+  dist_ = cv::max(dist_hard - band, 0.0f);
+  dist_.setTo(0.0f, cspace_);
 }
 
 bool GridPlanner::free(double x, double y) const
@@ -106,34 +113,56 @@ double GridPlanner::freeDistance(double x, double y, double ux, double uy, doubl
   return max_d;
 }
 
-// Straight segment through free C-space keeping at least `need` metres from its boundary.
-bool GridPlanner::lineOfSight(int r0, int c0, int r1, int c1, float need) const
+double GridPlanner::reachSpeed(int r, int c, int sr, int sc, double v0) const
 {
+  const double d = std::hypot(r - sr, c - sc) * p_.res;                      // <= the path distance
+  const double to_goal = std::max(0.0, keep_.goal_x - front_ - (p_.x_min + c * p_.res));
+  const double v_goal2 = 2 * p_.a_brake * std::max(0.0, keep_.front_wall_x - keep_.goal_x - 0.03);
+  return std::min(p_.v_max, std::min(std::sqrt(v0 * v0 + 2 * p_.a_max * d), std::sqrt(v_goal2 + 2 * p_.a_brake * to_goal)));
+}
+
+float GridPlanner::stepFactor(int r, int c, double v_reach) const
+{
+  const float d = dist_.at<float>(r, c);
+  const float pref = static_cast<float>(p_.clearance_pref);
+  float f = 1.f + (d < pref ? static_cast<float>(p_.clearance_weight) * (pref - d) / pref : 0.f);
+  const double v = std::min(v_reach, p_.v_tight + p_.v_per_clearance * d);
+  if (v > 1e-3)
+    f = std::max(f, static_cast<float>(v_reach / v));       // travel time relative to the fastest possible
+  if (cspace_.at<uint8_t>(r, c))
+    f *= static_cast<float>(p_.band_cost);                  // between the hard and the soft boundary
+  return f;
+}
+
+bool GridPlanner::lineOfSight(const std::vector<int>& cells, const std::vector<float>& need, size_t i, size_t j) const
+{
+  const int r0 = cells[i] / nx_, c0 = cells[i] % nx_, r1 = cells[j] / nx_, c1 = cells[j] % nx_;
   const int n = std::max(std::abs(r1 - r0), std::abs(c1 - c0));
-  for (int i = 0; i <= n; ++i)
+  for (int m = 0; m <= n; ++m)
   {
-    const int r = r0 + (n ? (r1 - r0) * i / n : 0);
-    const int c = c0 + (n ? (c1 - c0) * i / n : 0);
-    if (cspace_.at<uint8_t>(r, c) || dist_.at<float>(r, c) < need)
+    const int r = r0 + (n ? (r1 - r0) * m / n : 0);
+    const int c = c0 + (n ? (c1 - c0) * m / n : 0);
+    const size_t k = i + (n ? (j - i) * static_cast<size_t>(m) / static_cast<size_t>(n) : 0);
+    if (cspace_.at<uint8_t>(r, c) || dist_.at<float>(r, c) < need[k])
       return false;
   }
   return true;
 }
 
-bool GridPlanner::plan(double x, double y, std::vector<Pt>& path) const
+bool GridPlanner::plan(double x, double y, std::vector<Pt>& path, const std::vector<Pt>* previous, double v0) const
 {
   path.clear();
   int sr, sc;
   if (!cell(x, y, sr, sc))
     return false;
-  if (cspace_.at<uint8_t>(sr, sc))                         // snap to the nearest free cell
+  if (hard_.at<uint8_t>(sr, sc))                           // snap to the nearest cell outside the hard C-space
   {
     const int k = static_cast<int>(std::lround(p_.start_snap / p_.res));
     double best = 1e9;
     int br = -1, bc = -1;
     for (int r = std::max(0, sr - k); r <= std::min(ny_ - 1, sr + k); ++r)
       for (int c = std::max(0, sc - k); c <= std::min(nx_ - 1, sc + k); ++c)
-        if (!cspace_.at<uint8_t>(r, c) && std::hypot(r - sr, c - sc) < best)
+        if (!hard_.at<uint8_t>(r, c) && std::hypot(r - sr, c - sc) < best)
         {
           best = std::hypot(r - sr, c - sc);
           br = r;
@@ -144,6 +173,19 @@ bool GridPlanner::plan(double x, double y, std::vector<Pt>& path) const
     sr = br;
     sc = bc;
   }
+  // hysteresis: cells near the path being followed
+  cv::Mat keep;
+  if (previous && previous->size() >= 2 && p_.keep_factor < 1.0)
+  {
+    keep = cv::Mat::zeros(ny_, nx_, CV_8U);
+    std::vector<cv::Point> poly;
+    for (const Pt& q : *previous)
+      poly.emplace_back(static_cast<int>(std::lround((q.x - p_.x_min) / p_.res)),
+                        static_cast<int>(std::lround((q.y - p_.y_min) / p_.res)));
+    cv::polylines(keep, std::vector<std::vector<cv::Point>>{poly}, false, cv::Scalar(1),
+                  std::max(1, static_cast<int>(std::lround(2 * p_.keep_radius / p_.res))));
+  }
+  const float keep_f = static_cast<float>(p_.keep_factor);
   const int goal_col = static_cast<int>(std::ceil((keep_.goal_x - front_ - p_.x_min) / p_.res));
   const int N = nx_ * ny_;
   std::vector<float> g(N, 1e30f);
@@ -151,7 +193,9 @@ bool GridPlanner::plan(double x, double y, std::vector<Pt>& path) const
   std::vector<uint8_t> closed(N, 0);
   using Node = std::pair<float, int>;
   std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open;
-  auto h = [&](int c) { return static_cast<float>(std::max(0, goal_col - c) * p_.res); };
+  // admissible: no step costs less than res x keep_factor
+  const float h_scale = static_cast<float>(p_.res) * (keep.empty() ? 1.f : std::min(1.f, keep_f));
+  auto h = [&](int c) { return static_cast<float>(std::max(0, goal_col - c)) * h_scale; };
   const int s = sr * nx_ + sc;
   g[s] = 0;
   open.push({h(sc), s});
@@ -173,14 +217,15 @@ bool GridPlanner::plan(double x, double y, std::vector<Pt>& path) const
     for (int k = 0; k < 8; ++k)
     {
       const int vr = ur + dr[k], vc = uc + dc[k];
-      if (vr < 0 || vr >= ny_ || vc < 0 || vc >= nx_ || cspace_.at<uint8_t>(vr, vc))
+      if (vr < 0 || vr >= ny_ || vc < 0 || vc >= nx_ || hard_.at<uint8_t>(vr, vc))
         continue;
       const int v = vr * nx_ + vc;
       if (closed[v])
         continue;
-      const float d = dist_.at<float>(vr, vc);
-      const float pen = d < p_.clearance_pref ? p_.clearance_weight * (p_.clearance_pref - d) / p_.clearance_pref : 0.f;
-      const float step = p_.res * ((dr[k] && dc[k]) ? 1.41421356f : 1.f) * (1.f + pen);
+      float f = stepFactor(vr, vc, reachSpeed(vr, vc, sr, sc, v0));
+      if (!keep.empty() && keep.at<uint8_t>(vr, vc))
+        f *= keep_f;
+      const float step = static_cast<float>(p_.res) * ((dr[k] && dc[k]) ? 1.41421356f : 1.f) * f;
       if (g[u] + step < g[v])
       {
         g[v] = g[u] + step;
@@ -196,29 +241,33 @@ bool GridPlanner::plan(double x, double y, std::vector<Pt>& path) const
     cells.push_back(v);
   std::reverse(cells.begin(), cells.end());
   // Shortcut smoothing: keep a waypoint only where the straight line to a later one would be
-  // blocked. A shortcut must keep the clearance the A* cells it replaces had (up to clearance_pref):
-  // otherwise it pulls a path that A* centred in a wide gap back against an obstacle (and the speed
-  // planner then slows down for the small clearance). In tight gaps it may keep what A* had.
-  const float pref = static_cast<float>(p_.clearance_pref), floor_need = static_cast<float>(p_.res * 1.5);
-  std::vector<float> dcell(cells.size());
+  // blocked. Every point of a shortcut must keep the clearance the A* path had around the
+  // corresponding cells (up to clearance_pref), less one cell. Requiring only the smallest clearance
+  // of the replaced cells - as before - let a shortcut from a tight gap's exit run along the next
+  // obstacle at that gap's 1-2 cm, crawling at v_tight. Not more than clearance_pref: A* has no
+  // turning cost, and keeping the travel-time clearance made the path weave between boxes.
+  const float floor_need = static_cast<float>(p_.res * 1.5);
+  std::vector<float> need(cells.size());
+  const int w = 3;                                          // +-3 cells: lenient where A* came close nearby
   for (size_t k = 0; k < cells.size(); ++k)
-    dcell[k] = dist_.at<float>(cells[k] / nx_, cells[k] % nx_);
-  std::vector<float> run_min(cells.size());
-  std::vector<int> keep{cells.front()};
+  {
+    const float want = static_cast<float>(p_.clearance_pref);
+    float local = 1e9f;
+    for (size_t q = (k >= static_cast<size_t>(w) ? k - w : 0); q <= std::min(cells.size() - 1, k + w); ++q)
+      local = std::min(local, dist_.at<float>(cells[q] / nx_, cells[q] % nx_));
+    need[k] = std::max(floor_need, std::min(want, local) - static_cast<float>(p_.res));
+  }
+  std::vector<int> keep_cells{cells.front()};
   size_t i = 0;
   while (i + 1 < cells.size())
   {
-    run_min[i] = dcell[i];
-    for (size_t k = i + 1; k < cells.size(); ++k)
-      run_min[k] = std::min(run_min[k - 1], dcell[k]);
     size_t j = cells.size() - 1;
-    auto need = [&](size_t jj) { return std::max(floor_need, std::min(pref, run_min[jj]) - static_cast<float>(p_.res)); };
-    while (j > i + 1 && !lineOfSight(cells[i] / nx_, cells[i] % nx_, cells[j] / nx_, cells[j] % nx_, need(j)))
+    while (j > i + 1 && !lineOfSight(cells, need, i, j))
       --j;
-    keep.push_back(cells[j]);
+    keep_cells.push_back(cells[j]);
     i = j;
   }
-  for (int v : keep)
+  for (int v : keep_cells)
     path.push_back({p_.x_min + (v % nx_) * p_.res, p_.y_min + (v / nx_) * p_.res});
   path.front() = {x, y};
   return true;

@@ -211,6 +211,7 @@ private:
         {"v_tight", &NavNode::v_tight_, 0.15},             // speed with zero clearance
         {"v_per_clearance", &NavNode::v_per_clear_, 8.0},  // + this x clearance [m/s per m]
         {"lookahead", &NavNode::lookahead_, 0.35},
+        {"route_keep", &NavNode::route_keep_, 0.7},       // A* cost x this near the current path (hysteresis)
         {"k_heading", &NavNode::k_heading_, 1.5},
         {"w_max", &NavNode::w_max_, 1.0},
         // below the planner's 2 cm obstacle inflation: the safety layer must not veto paths the planner
@@ -221,6 +222,7 @@ private:
         {"wall_max_range", &NavNode::wall_max_range_, 2.5},
         {"line_margin_base", &NavNode::line_margin_base_, 0.02},
         {"line_margin_sigma", &NavNode::line_margin_sigma_, 2.0},
+        {"wall_margin", &NavNode::wall_margin_, 0.08},    // [m] + line_margin_sigma x sigma_x before the low wall
         {"clear_margin", &NavNode::clear_margin_, 0.02},    // beams clear up to max(this, clear_sigmas x sigma) short of a hit
         {"clear_sigmas", &NavNode::clear_sigmas_, 2.0},
         {"recovery_after", &NavNode::recovery_after_, 1.0},
@@ -233,6 +235,18 @@ private:
   {
     for (const Tune& t : tunables())
       pnh_.param(t.name, this->*t.field, t.def >= 0 ? t.def : (sensor_ == "camera" ? 2.5 : 6.0));
+    // the planner uses the same speed model and never plans closer to an obstacle than the safety
+    // layer allows
+    PlannerParams pp;
+    pp.hard_inflation = safety_margin_;
+    pp.keep_factor = route_keep_;
+    pp.v_max = v_max_;
+    pp.v_tight = v_tight_;
+    pp.v_per_clearance = v_per_clear_;
+    pp.a_max = a_max_;
+    pp.a_brake = a_brake_;
+    planner_template_ = GridPlanner(pp);
+    planner_template_.setFootprint(footprint_);
     OccParams op;
     op.clear_margin = clear_margin_;
     op.clear_sigmas = clear_sigmas_;
@@ -544,6 +558,9 @@ private:
       const std::vector<Pt> cells = grid_.occupied();
       Keepout k = keep_;
       k.line_margin = line_margin_base_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(1, 1)));
+      auto pl = std::make_shared<GridPlanner>(planner_template_);   // copied under the lock: start replaces it
+      const std::vector<Pt> previous = path_ok_ ? path_ : std::vector<Pt>();
+      const double v0 = std::hypot(cmd_.linear.x, cmd_.linear.y);
       lk.unlock();
 
       std::vector<Pt> obs;
@@ -556,12 +573,11 @@ private:
           continue;
         obs.push_back(apply(T, c));
       }
-      auto pl = std::make_shared<GridPlanner>(planner_template_);
       std::vector<Pt> path;
       const ros::WallTime w0 = ros::WallTime::now();
       pl->build(obs, F.th, k);
       const ros::WallTime w1 = ros::WallTime::now();
-      const bool ok = pl->plan(F.x, F.y, path);
+      const bool ok = pl->plan(F.x, F.y, path, &previous, v0);
       const ros::WallTime w2 = ros::WallTime::now();
       const ros::Time now = ros::Time::now();
 
@@ -757,8 +773,11 @@ private:
         closestOnPath(F, seg, on);
         const double horizon = v_max_ * react_time_ + v_max_ * v_max_ / (2 * a_brake_) + 0.3;
         const auto& pl = *planner_;
-        speed_.v_corner = std::max(v_tight_, pathCornerLimit(path_, seg, on, [&](size_t k) { return pl.clearance(path_[k].x, path_[k].y); },
-                                                             a_max_, a_brake_, react_time_, min_cut, horizon, 0.15, &speed_.corner_at));
+        speed_.v_corner = std::max(
+            v_tight_, pathCornerLimit(
+                          path_, seg, on, [&](size_t k) { return pl.clearance(path_[k].x, path_[k].y); },
+                          [&](size_t k, double ux, double uy) { return pl.freeDistance(path_[k].x, path_[k].y, ux, uy, 3.0); },
+                          a_max_, a_brake_, react_time_, min_cut, horizon, 0.15, &speed_.corner_at));
         // the clearance limit also holds ahead: be down to it when entering a narrow passage
         speed_.v_clear = std::min(speed_.v_clear, pathCapLimit(path_, seg, on, [&](const Pt& q) { return v_tight_ + v_per_clear_ * pl.clearance(q.x, q.y); },
                                                                a_brake_, react_time_, horizon));
@@ -811,7 +830,10 @@ private:
         front = std::max(front, qx);
         back = std::max(back, -qx);
       }
-      const double dl = distanceToBounds(F.x, F.y, fx / vf, fy / vf, keep_.back_wall_x + back, keep_.front_wall_x - front,
+      // the low wall: the x estimate drifts more than its sigma says (8 cm behind the truth at the goal
+      // line at 1 m/s, sigma_x 1 cm), and after the goal line the robot can only brake: keep wall_margin
+      const double wm = wall_margin_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(0, 0)));
+      const double dl = distanceToBounds(F.x, F.y, fx / vf, fy / vf, keep_.back_wall_x + back + wm, keep_.front_wall_x - front - wm,
                                          -(keep_.red_inner - lm) + down, keep_.red_inner - lm - up);
       speed_.v_line = approachSpeed(dl - stop_margin_, a_brake_, react_time_);
       if (speed_.v_line < vf)
@@ -1039,7 +1061,7 @@ private:
   double rate_ = 20, plan_rate_ = 10, mapping_duration_ = 1, max_imu_step_ = 0.3;
   double v_max_, a_max_, a_brake_, react_time_ = 0.1, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
   double safety_margin_, max_obs_range_, line_margin_base_, line_margin_sigma_, no_path_timeout_;
-  double clear_margin_ = 0.02, clear_sigmas_ = 2.0, recovery_after_ = 1.0;
+  double clear_margin_ = 0.02, clear_sigmas_ = 2.0, recovery_after_ = 1.0, route_keep_ = 0.7, wall_margin_ = 0.08;
   std::vector<float> sigma_table_;                 // range uncertainty per cm of range (camera), empty = lidar
   size_t occupied_cells_ = 0;
   bool recovered_ = false;
