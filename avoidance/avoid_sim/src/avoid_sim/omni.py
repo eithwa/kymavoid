@@ -148,11 +148,21 @@ class Scanner:
         self.iy = np.clip(int(cy) - dis_y, 0, model.h - 1)
         self.px = np.hypot(dis_x, dis_y)
 
-    def scan(self, mask, pixel_noise=0.0, dropout=0.0, rng=None):
-        """Distances [cm, int] for every scan line, 999 when nothing is found."""
+    def first_hits(self, mask):
+        """Per scan line: index of the first marked pixel along the line, and whether there is one."""
         hits = mask[self.iy, self.ix]
         first = np.argmax(hits, axis=1)
-        found = hits[np.arange(len(first)), first]
+        return first, hits[np.arange(len(first)), first]
+
+    def hit_pixels(self, mask):
+        """Image coordinates (x, y) of the first marked pixel of every line that found one."""
+        first, found = self.first_hits(mask)
+        lines = np.nonzero(found)[0]
+        return self.ix[lines, first[lines]], self.iy[lines, first[lines]]
+
+    def scan(self, mask, pixel_noise=0.0, dropout=0.0, rng=None):
+        """Distances [cm, int] for every scan line, 999 when nothing is found."""
+        first, found = self.first_hits(mask)
         px = np.where(found, self.px[np.arange(len(first)), first], self.px[:, -1])
         if rng is not None and pixel_noise > 0:
             px = px + np.where(found, rng.normal(0.0, pixel_noise, len(px)), 0.0)

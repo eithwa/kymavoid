@@ -5,15 +5,21 @@
 from the true robot pose and the obstacle layout, through avoid_sim.omni (rendered masks +
 black_item's own scan). Configurable imperfections: mirror-centre calibration error, pixel
 noise, dropouts, latency.
+
+/camera/black and /camera/red (sensor_msgs/Image, rgb8): the masks with black_item's scan drawn
+on them, the same topics black_item publishes, for the web UI (through mjpeg_server). Drawn only
+while someone subscribes, at most image_rate Hz.
 """
 import collections
 import math
 import threading
+import time
 
 import numpy as np
 import rospy
 from geometry_msgs.msg import PoseArray
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Image
 from std_msgs.msg import Header, Int32MultiArray
 
 from avoid_sim.geometry import Field
@@ -42,6 +48,11 @@ class VirtualCamera:
         self.obstacles = []
         self.black_pub = rospy.Publisher('/vision/BlackRealDis', Int32MultiArray, queue_size=1)
         self.red_pub = rospy.Publisher('/vision/redRealDis', Int32MultiArray, queue_size=1)
+        self.black_img_pub = rospy.Publisher('/camera/black', Image, queue_size=1)
+        self.red_img_pub = rospy.Publisher('/camera/red', Image, queue_size=1)
+        self.image_period = 1.0 / p('image_rate', 10.0)
+        self.last_image = 0.0
+        self.image_layers_cache = self.image_layers()
         rospy.Subscriber('/avoid_sim/layout', PoseArray, self.on_layout)
         # reseeded on every field reset, so a seed reproduces the same camera noise
         rospy.Subscriber('/avoid_sim/reset_event', Header,
@@ -86,7 +97,56 @@ class VirtualCamera:
             black, self.pixel_noise, self.dropout, self.rng).tolist()))
         self.red_pub.publish(Int32MultiArray(data=self.scanner.scan(
             red, self.pixel_noise, self.dropout, self.rng).tolist()))
+        self.publish_images(black, red)
 
+    def image_layers(self):
+        """What black_item marks on its frames, around the configured mirror centre. Under the
+        masks: the ring it scans (the floor it can see). Over them: the inner disk it skips (the
+        robot), the outer circle and scan line 0 (straight ahead)."""
+        m = self.model
+        v, u = np.mgrid[0:m.h, 0:m.w]
+        r = np.hypot(u - m.cx, v - m.cy)
+        under = np.zeros((m.h, m.w, 3), np.uint8)
+        under[(r >= m.inner) & (r <= m.outer)] = (28, 30, 34)
+        over = np.zeros((m.h, m.w, 3), np.uint8)
+        over[r < m.inner] = (70, 70, 70)
+        over[np.abs(r - m.outer) <= 1.0] = (76, 141, 255)
+        over[self.scanner.iy[0], self.scanner.ix[0]] = (63, 185, 80)
+        return under, over, over.any(axis=2)
+
+    @staticmethod
+    def thicken(mask):
+        """One pixel wider each way: the red line is ~1 px in the image, hidden under the scan dots."""
+        out = mask.copy()
+        out[1:] |= mask[:-1]
+        out[:-1] |= mask[1:]
+        out[:, 1:] |= mask[:, :-1]
+        out[:, :-1] |= mask[:, 1:]
+        return out
+
+    def publish_images(self, black, red):
+        t = time.monotonic()
+        if t - self.last_image < self.image_period:
+            return
+        todo = [(pub, mask, colour, hit) for pub, mask, colour, hit in (
+            (self.black_img_pub, black, (235, 235, 235), (255, 152, 0)),
+            (self.red_img_pub, red, (229, 57, 53), (242, 201, 76))) if pub.get_num_connections()]
+        if not todo:
+            return
+        self.last_image = t
+        h, w = self.model.h, self.model.w
+        under, over, over_mask = self.image_layers_cache
+        stamp = rospy.Time.now()
+        for pub, mask, colour, hit in todo:
+            img = under.copy()
+            img[self.thicken(mask) if mask is red else mask] = colour
+            img[over_mask] = over[over_mask]
+            hx, hy = self.scanner.hit_pixels(mask)                     # what the scan found: 3x3 dots
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    img[np.clip(hy + dy, 0, h - 1), np.clip(hx + dx, 0, w - 1)] = hit
+            pub.publish(Image(header=Header(stamp=stamp, frame_id='camera'), height=h, width=w,
+                              encoding='rgb8', is_bigendian=0, step=w * 3, data=img.tobytes()))
 
 if __name__ == '__main__':
     rospy.init_node('virtual_camera')
