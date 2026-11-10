@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Spawns the obstacles and serves /avoid_sim/reset.
+"""Spawns the obstacles and serves /avoid_sim/reset and /avoid_sim/save_case.
 
-reset: pause physics -> robot back to the start pose (optionally with a placement error) ->
-obstacles re-placed to spec (random with a seed, or the original 'classic' layout) ->
-publish the layout (latched) and an event so the other sim nodes can reset -> unpause.
+reset: pause physics -> robot back to the start pose (optionally with a placement error, or an
+explicit pose) -> obstacles re-placed (random to spec with a seed, the original 'classic' layout,
+or explicit centres from a recorded case) -> publish the layout (latched) and an event so the other
+sim nodes can reset -> unpause.
+save_case: append the current field to a case file in avoid_sim/cases (avoid_sim.cases).
 """
 import math
 import os
@@ -11,13 +13,15 @@ import os
 import numpy as np
 import rospkg
 import rospy
-from avoid_msgs.srv import ResetField, ResetFieldResponse
+import yaml
+from avoid_msgs.srv import ResetField, ResetFieldResponse, SaveCase, SaveCaseResponse
 from gazebo_msgs.msg import ModelState
 from gazebo_msgs.srv import GetWorldProperties, SetModelState, SpawnModel
 from geometry_msgs.msg import Pose, Pose2D, PoseArray
 from std_msgs.msg import Header
 from std_srvs.srv import Empty
 
+from avoid_sim import cases
 from avoid_sim.geometry import CLASSIC_LAYOUT, Field, layout_violations, load_footprint, sample_layout, ConfigSpace
 
 ROBOT = 'avoid_robot'
@@ -57,7 +61,9 @@ class FieldManager:
             if rospy.Time.now() > deadline:
                 raise RuntimeError('robot model %s never appeared' % ROBOT)
             rospy.sleep(0.2)
+        self.current = None
         rospy.Service('/avoid_sim/reset', ResetField, self.handle_reset)
+        rospy.Service('/avoid_sim/save_case', SaveCase, self.handle_save)
         layout = rospy.get_param('~layout', 'random')
         seed = int(rospy.get_param('~seed', -1))
         res = self.reset(seed, layout, 0.0, 0.0)
@@ -86,22 +92,31 @@ class FieldManager:
         if not r.success:
             raise RuntimeError('set_model_state %s failed: %s' % (name, r.status_message))
 
-    def reset(self, seed, layout_name, err_xy, err_yaw):
+    def reset(self, seed, layout_name, err_xy, err_yaw, obstacles=None, start=None):
         if seed < 0:
             seed = int(np.random.SeedSequence().entropy % (2 ** 31))
         rng = np.random.default_rng(seed)
         attempts = 0
-        if layout_name == 'classic':
+        if obstacles:
+            if len(obstacles) > self.f.count:
+                raise ValueError('%d obstacles given, only %d spawned (/obstacles/count)' % (len(obstacles), self.f.count))
+            layout = [(o.x, o.y) for o in obstacles]
+            layout_name = layout_name or 'case'
+        elif layout_name == 'classic':
             layout = list(CLASSIC_LAYOUT[:self.f.count])
         else:
             layout, attempts = sample_layout(self.f, self.footprint, rng)
-        sx = self.f.start_x + (rng.normal(0, err_xy) if err_xy > 0 else 0.0)
-        sy = self.f.start_y + (rng.normal(0, err_xy) if err_xy > 0 else 0.0)
-        syaw = self.f.start_yaw + (rng.normal(0, err_yaw) if err_yaw > 0 else 0.0)
+        if start:
+            sx, sy, syaw = start[0].x, start[0].y, start[0].theta
+        else:
+            sx = self.f.start_x + (rng.normal(0, err_xy) if err_xy > 0 else 0.0)
+            sy = self.f.start_y + (rng.normal(0, err_xy) if err_xy > 0 else 0.0)
+            syaw = self.f.start_yaw + (rng.normal(0, err_yaw) if err_yaw > 0 else 0.0)
+        parked = [(10.0 + k, 10.0) for k in range(len(layout), self.f.count)]   # unused boxes stay out of the field
 
         self.pause()
         try:
-            for n, (x, y) in zip(self.names, layout):
+            for n, (x, y) in zip(self.names, layout + parked):
                 self.place(n, x, y)
             self.place(ROBOT, sx, sy, syaw, 0.01)
         finally:
@@ -118,6 +133,7 @@ class FieldManager:
         ev.stamp, ev.frame_id, ev.seq = rospy.Time.now(), layout_name, seed
         self.event_pub.publish(ev)
 
+        self.current = dict(seed=seed, layout=layout_name, start=(sx, sy, syaw), obstacles=list(layout))
         res = ResetFieldResponse()
         res.success, res.seed, res.attempts = True, seed, attempts
         res.start = Pose2D(sx, sy, syaw)
@@ -130,10 +146,30 @@ class FieldManager:
 
     def handle_reset(self, req):
         try:
-            return self.reset(req.seed, req.layout or 'random', req.start_error_xy, req.start_error_yaw)
+            layout = req.layout or ('' if req.use_obstacles else 'random')
+            return self.reset(req.seed, layout, req.start_error_xy, req.start_error_yaw,
+                              req.use_obstacles, req.use_start)
         except Exception as e:   # report instead of killing the service
             rospy.logerr('reset failed: %s', e)
             return ResetFieldResponse(success=False, message=str(e))
+
+    def handle_save(self, req):
+        try:
+            if self.current is None:
+                raise RuntimeError('no field placed yet')
+            expect = yaml.safe_load(req.expect) if req.expect.strip() else None
+            if expect is not None and not isinstance(expect, dict):
+                raise ValueError('expect must be a mapping, e.g. {result: success, max_time: 8.0}')
+            c = self.current
+            case = cases.make(c['seed'], c['layout'], c['start'], c['obstacles'], req.sensor, req.note.strip(),
+                              req.observed.strip(), expect, req.status.strip() or 'open', req.id.strip())
+            path = cases.resolve(req.file.strip() or 'recorded.yaml')
+            cid = cases.append(path, case)
+            rospy.loginfo('saved case %s to %s', cid, path)
+            return SaveCaseResponse(success=True, message='saved %s' % cid, id=cid, path=os.path.realpath(path))
+        except Exception as e:
+            rospy.logerr('save_case failed: %s', e)
+            return SaveCaseResponse(success=False, message=str(e))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,14 @@
+# Simulation only: record the current field (obstacles, start pose, noise seed) as a case in
+# avoid_sim/cases/<file>, to study it later and to re-run it as a test (evaluate.py --cases).
+string file          # case file name in avoid_sim/cases ("" = recorded.yaml)
+string id            # "" = generated from the date and the seed
+string sensor        # sensor configuration it was seen with (camera | lidar)
+string note          # what went wrong / what to look at
+string observed      # what happened, e.g. "FINISHED 8.22 s"
+string expect        # YAML mapping, e.g. "{result: success, max_time: 8.0}" ("" = {result: success})
+string status        # open (known problem) | fixed (regression test); "" = open
+---
+bool success
+string message
+string id
+string path

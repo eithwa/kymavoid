@@ -1,0 +1,80 @@
+# avoid_sim cases: recorded fields, kept to study them and to re-run them as tests.
+# Format: avoid_sim/src/avoid_sim/cases.py. Run: rosrun avoid_sim evaluate.py --cases <this file>
+# or avoid_bringup/scripts/run_cases.sh. Record from the web UI (simulation: 記錄這個 case).
+cases:
+- id: wide-gap-slow-seed2
+  recorded: 2026-11-10 10:50
+  sensor: camera
+  seed: 2
+  layout: random
+  start: [-2.0, 0.0, 0.0]
+  obstacles:
+  - [-0.3059, -0.5038]
+  - [1.7941, -1.0202]
+  - [0.9804, 0.5714]
+  - [0.8366, -0.8748]
+  - [2.3763, 0.4577]
+  - [-0.091, 1.0605]
+  - [-1.2243, 0.8325]
+  - [-1.2577, -0.762]
+  note: 路線很寬，走到中間速度卻降到很慢。原因：路徑平滑只保留 7.5 cm 間隙、把 A* 置中的路徑拉回貼著障礙物；間隙限速 0.15+3x 間隙太保守。修正後約 6.5 s
+  observed: FINISHED 8.22 s; 中段只有 0.35 m/s（2026-11-10，v_per_clearance 3）
+  expect: {result: success, max_time: 7.5}
+  status: fixed
+- id: red-line-touch-seed4
+  recorded: 2026-11-10 10:50
+  sensor: camera
+  seed: 4
+  layout: random
+  start: [-2.0, 0.0, 0.0]
+  obstacles:
+  - [2.2836, 0.0283]
+  - [2.4097, -1.0479]
+  - [1.008, -0.3088]
+  - [0.3359, 0.7224]
+  - [2.3819, 1.0726]
+  - [-0.6248, 0.2721]
+  - [1.3785, 1.107]
+  - [0.0298, -0.6906]
+  note: 往左邊紅線旁的死路走時碰到紅線。規劃移到獨立執行緒後 40 次沒有再發生，但因果沒有證實：用 --repeat 多跑幾次觀察。只檢查不越線（這個場地常因死路逾時，另一個 case）
+  observed: line（越線 4 mm）at 3.9 s（v_per_clearance 8，規劃還在同一個執行緒、會卡住控制 0.2-0.46 s 時）
+  expect: {min_line: 0.0}
+  status: fixed
+- id: dead-end-left-seed4
+  recorded: 2026-11-10 10:50
+  sensor: camera
+  seed: 4
+  layout: random
+  start: [-2.0, 0.0, 0.0]
+  obstacles:
+  - [2.2836, 0.0283]
+  - [2.4097, -1.0479]
+  - [1.008, -0.3088]
+  - [0.3359, 0.7224]
+  - [2.3819, 1.0726]
+  - [-0.6248, 0.2721]
+  - [1.3785, 1.107]
+  - [0.0298, -0.6906]
+  note: 左邊紅線旁的死路：先往左上走進死路再退出來，有時候逾時。屬於路線選擇問題（加分項目：起跑前的路線提示）
+  observed: timeout 40 s / success 22.8-24.6 s（同一場地每次不同）
+  expect: {result: success, max_time: 30.0}
+  status: open
+- id: slow-detour-seed6
+  recorded: 2026-11-10 10:50
+  sensor: camera
+  seed: 6
+  layout: random
+  start: [-2.0, 0.0, 0.0]
+  obstacles:
+  - [0.8836, -0.5776]
+  - [2.0867, -0.8176]
+  - [1.9865, 1.1406]
+  - [-1.1888, -0.855]
+  - [0.7816, 0.5239]
+  - [-0.7499, 0.8241]
+  - [2.4382, 0.1645]
+  - [-0.1526, -0.6273]
+  note: 路線選擇不穩定：同一個場地有時繞遠路或進死路再退出，時間差將近 3 倍
+  observed: success 10.5 s（v_per_clearance 3）/ 17.6 s / 28.7 s（v_per_clearance 8）
+  expect: {result: success, max_time: 12.0}
+  status: open
