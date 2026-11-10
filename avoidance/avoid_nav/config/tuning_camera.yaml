@@ -1,15 +1,16 @@
 # nav_node tuning (camera configuration). Loaded into ~ by nav.launch, re-read at every start;
 # the web UI edits these on the parameter server and "save" writes this file back.
 v_max: 0.8                # [m/s]
-a_max: 1.0                # [m/s^2] acceleration
-a_brake: 1.2              # [m/s^2] braking used for v <= sqrt(2 a d_free)
+a_max: 1.0                # [m/s^2] acceleration, also the turning acceleration of the corner limits
+a_brake: 1.2              # [m/s^2] braking every speed limit plans with (obstacles, lines, corners, sensor range)
+react_time: 0.1           # [s] from seeing something to braking for it (sensor latency + control period)
 stop_margin: 0.03         # [m] stop this short of the C-space boundary
 v_tight: 0.15             # [m/s] speed with zero clearance
 v_per_clearance: 8.0      # [m/s per m] extra speed per metre of clearance (3.0 crawled through wide gaps)
 lookahead: 0.35           # [m] (visible-target pursuit)
 k_heading: 1.5            # heading P gain
 w_max: 1.0                # [rad/s]
-safety_margin: 0.03       # [m] safety layer: footprint sweep margin
+safety_margin: 0.01       # [m] safety layer: footprint sweep margin (below the planner's 2 cm inflation)
 max_obstacle_range: 2.5    # [m] obstacle readings farther than this are ignored
 red_line_max_range: 1.5   # [m] red-line fits only from closer points
 wall_max_range: 2.5       # [m] low-wall fits only from closer points (camera)

@@ -46,6 +46,7 @@
 #include "avoid_nav/occupancy.h"
 #include "avoid_nav/planner.h"
 #include "avoid_nav/polygon.h"
+#include "avoid_nav/speed_limits.h"
 
 namespace avoid_nav
 {
@@ -205,13 +206,16 @@ private:
         {"v_max", &NavNode::v_max_, 0.8},
         {"a_max", &NavNode::a_max_, 1.0},
         {"a_brake", &NavNode::a_brake_, 1.2},
+        {"react_time", &NavNode::react_time_, 0.1},        // [s] from seeing something to braking for it
         {"stop_margin", &NavNode::stop_margin_, 0.03},
         {"v_tight", &NavNode::v_tight_, 0.15},             // speed with zero clearance
         {"v_per_clearance", &NavNode::v_per_clear_, 8.0},  // + this x clearance [m/s per m]
         {"lookahead", &NavNode::lookahead_, 0.35},
         {"k_heading", &NavNode::k_heading_, 1.5},
         {"w_max", &NavNode::w_max_, 1.0},
-        {"safety_margin", &NavNode::safety_margin_, 0.03},
+        // below the planner's 2 cm obstacle inflation: the safety layer must not veto paths the planner
+        // finds (3 cm stopped the robot for good in a 49 cm gap with 1-2 cm of map noise)
+        {"safety_margin", &NavNode::safety_margin_, 0.01},
         {"max_obstacle_range", &NavNode::max_obs_range_, -1},   // default depends on the sensor
         {"red_line_max_range", &NavNode::red_max_range_, 1.5},  // real images: red lines unreliable beyond ~1 m
         {"wall_max_range", &NavNode::wall_max_range_, 2.5},
@@ -533,6 +537,7 @@ private:
       if (!active())
         continue;
       const unsigned run = run_id_;
+      const ros::Time snap_time = ros::Time::now();             // the path and maps describe this moment
       const Pose2 F = fieldPose();
       const Pose2 T = compose(F, inverse(local_));             // local -> field
       const Pose2 base_from_local = inverse(local_);
@@ -575,8 +580,10 @@ private:
         last_path_ok_ = now;
         recovered_ = false;
       }
-      publishPath(now);
-      publishMaps(now, obs, *pl);
+      // stamped with the snapshot time: the obstacles were mapped into the field frame with the pose
+      // of that moment, 20-100+ ms before planning finished
+      publishPath(snap_time);
+      publishMaps(snap_time, obs, *pl);
     }
   }
 
@@ -613,10 +620,10 @@ private:
     path_pub_.publish(p);
   }
 
-  Pt lookaheadPoint(const Pose2& F) const
+  // closest point on the path (segment seg -> seg + 1)
+  void closestOnPath(const Pose2& F, size_t& seg, Pt& p) const
   {
-    // closest point on the path, then lookahead_ further along it
-    size_t seg = 0;
+    seg = 0;
     double best = 1e9, best_t = 0;
     for (size_t i = 0; i + 1 < path_.size(); ++i)
     {
@@ -631,8 +638,16 @@ private:
         best_t = t;
       }
     }
-    double left = lookahead_;
-    Pt p{path_[seg].x + best_t * (path_[seg + 1].x - path_[seg].x), path_[seg].y + best_t * (path_[seg + 1].y - path_[seg].y)};
+    p = {path_[seg].x + best_t * (path_[seg + 1].x - path_[seg].x), path_[seg].y + best_t * (path_[seg + 1].y - path_[seg].y)};
+  }
+
+  // the point `dist` further along the path than the robot's closest point
+  Pt pointAlongPath(const Pose2& F, double dist) const
+  {
+    size_t seg;
+    Pt p;
+    closestOnPath(F, seg, p);
+    double left = dist;
     for (size_t i = seg; i + 1 < path_.size(); ++i)
     {
       const Pt b = path_[i + 1];
@@ -645,47 +660,49 @@ private:
     return path_.back();
   }
 
-  // Pure-pursuit target: the farthest point along the path, within the lookahead, that the robot can
+  // Pure-pursuit target: the farthest point along the path, within `full`, that the robot can
   // reach in a straight line through free C-space. A* paths squeeze through gaps cell by cell; aiming
-  // straight at a fixed lookahead point would cut the corner of a narrow gap and stall.
-  Pt visibleTarget(const Pose2& F) const
+  // straight at a fixed lookahead point would cut the corner of a narrow gap and stall. In a corridor
+  // a few cm wide the A* path zigzags, so a near point may be hidden while a farther one is in view:
+  // keep looking (stopping at the first hidden one left a 2 cm target whose line clipped the C-space,
+  // and the robot stood still until the map noise changed).
+  Pt visibleTarget(const Pose2& F, double full) const
   {
-    const double full = lookahead_;
-    Pt best = lookaheadAt(F, 0.02);
+    Pt best = pointAlongPath(F, 0.02);
     for (double l = 0.04; l <= full + 1e-9; l += 0.02)
     {
-      const Pt p = lookaheadAt(F, l);
+      const Pt p = pointAlongPath(F, l);
       const double d = std::hypot(p.x - F.x, p.y - F.y);
       if (d < 1e-6)
         continue;
-      if (planner_->freeDistance(F.x, F.y, (p.x - F.x) / d, (p.y - F.y) / d, d) < d - 0.01)
-        break;
-      best = p;
+      if (planner_->freeDistance(F.x, F.y, (p.x - F.x) / d, (p.y - F.y) / d, d) >= d - 0.01)
+        best = p;
     }
     return best;
   }
 
-  Pt lookaheadAt(const Pose2& F, double dist) const
-  {
-    const double keep = lookahead_;
-    const_cast<NavNode*>(this)->lookahead_ = dist;
-    const Pt p = lookaheadPoint(F);
-    const_cast<NavNode*>(this)->lookahead_ = keep;
-    return p;
-  }
-
-  // largest speed along base-frame unit (ux, uy) for which the footprint can stop before any
-  // occupied cell; cells already inside the footprint are ignored (stale / drift)
+  // Largest speed along base-frame unit (ux, uy) from which the footprint, reacting after react_time
+  // and braking at a_brake, stops before it comes within safety_margin of an occupied cell. A cell
+  // already that close only forbids moving closer to it: sliding past it (a wall the planner's path
+  // runs along) is fine, and ignoring it - as before - let the robot drive into a box it touched.
+  // A cell inside the footprint is stale (odometry drift) and ignored.
   double safetySpeedLimit(double ux, double uy, double v) const
   {
-    const double reach = v * v / (2 * a_brake_) + safety_margin_ + 0.05;
+    const double reach = v * react_time_ + v * v / (2 * a_brake_) + safety_margin_ + 0.05;
     const Pose2 base_from_local = inverse(local_);
     double s_hit = 1e9;
     for (const Pt& c : grid_.occupied(local_.x, local_.y, reach + 0.35))
     {
       const Pt p = apply(base_from_local, c);
-      if (std::hypot(p.x, p.y) > reach + 0.35 || insideOrNear(footprint_, p, safety_margin_))
+      if (std::hypot(p.x, p.y) > reach + 0.35 || inside(footprint_, p))
         continue;
+      const double d0 = distanceToEdges(footprint_, p);
+      if (d0 <= safety_margin_)
+      {
+        if (distanceToEdges(footprint_, {p.x - ux * 0.01, p.y - uy * 0.01}) < d0 - 0.002)
+          return 0.0;                                // moving into it
+        continue;
+      }
       for (double s = 0.01; s <= reach; s += 0.01)
         if (insideOrNear(footprint_, {p.x - ux * s, p.y - uy * s}, safety_margin_))
         {
@@ -695,7 +712,7 @@ private:
     }
     if (s_hit > reach)
       return v;
-    return std::sqrt(2 * a_brake_ * std::max(0.0, s_hit - safety_margin_));
+    return approachSpeed(s_hit - 0.01, a_brake_, react_time_);   // 0.01: the sweep's step
   }
 
   geometry_msgs::Twist control(const Pose2& F, double dt)
@@ -703,39 +720,62 @@ private:
     geometry_msgs::Twist out;
     const double c = std::cos(F.th), s = std::sin(F.th);
     const double cur_fx = c * cmd_.linear.x - s * cmd_.linear.y, cur_fy = s * cmd_.linear.x + c * cmd_.linear.y;
+    const double cur = std::hypot(cur_fx, cur_fy);
     double des_fx = 0, des_fy = 0;
     speed_ = SpeedInfo();
     speed_.v_max = v_max_;
     speed_.limit = "no_path";                       // braking unless a target is found below
     if (path_ok_ && path_.size() >= 2)
     {
-      const Pt t = visibleTarget(F);
+      // Pure pursuit looks further ahead at speed: turning towards a target L away takes about v^2 / L
+      // of lateral acceleration, and the command limiter only allows a_max.
+      const Pt t = visibleTarget(F, std::max(lookahead_, cur * cur / (2 * a_max_)));
       double ux = t.x - F.x, uy = t.y - F.y;
       const double n = std::hypot(ux, uy);
       if (n > 1e-6)
       {
         ux /= n;
         uy /= n;
+        // All braking distances below include react_time; turns use a_max (the limiter's turning
+        // acceleration) and may drift by the clearance there (2 cm at least: a path may run along the
+        // C-space boundary, which is still 2 cm of obstacle inflation away from the cells).
+        const double min_cut = 0.02;
+        const double clear = planner_->clearance(F.x, F.y);
         const double dfree = planner_->freeDistance(F.x, F.y, ux, uy, 3.0);
-        speed_.v_dfree = std::sqrt(2 * a_brake_ * std::max(0.0, dfree - stop_margin_));
-        speed_.v_clear = v_tight_ + v_per_clear_ * planner_->clearance(F.x, F.y);
-        const double cur = std::hypot(cur_fx, cur_fy);
+        // never below v_tight: in a C-space corridor a few cm wide the line to the target can clip the
+        // inflated boundary right away; creeping on is safe, the safety layer keeps 1 cm from the cells
+        speed_.v_dfree = std::max(v_tight_, approachSpeed(dfree - stop_margin_, a_brake_, react_time_));
+        speed_.v_clear = v_tight_ + v_per_clear_ * clear;
         if (cur > 0.05)
         {
           const double turn = std::acos(std::max(-1.0, std::min(1.0, (cur_fx * ux + cur_fy * uy) / cur)));
-          speed_.v_turn = std::max(0.15, v_max_ * std::cos(std::min(turn, M_PI / 2)));
+          speed_.v_turn = std::max(v_tight_, turnSpeed(turn, std::max(min_cut, clear), a_max_));
         }
+        // corners further along the path: arrive at each slowly enough to turn through it
+        size_t seg;
+        Pt on;
+        closestOnPath(F, seg, on);
+        const double horizon = v_max_ * react_time_ + v_max_ * v_max_ / (2 * a_brake_) + 0.3;
+        const auto& pl = *planner_;
+        speed_.v_corner = std::max(v_tight_, pathCornerLimit(path_, seg, on, [&](size_t k) { return pl.clearance(path_[k].x, path_[k].y); },
+                                                             a_max_, a_brake_, react_time_, min_cut, horizon, 0.15, &speed_.corner_at));
+        // the clearance limit also holds ahead: be down to it when entering a narrow passage
+        speed_.v_clear = std::min(speed_.v_clear, pathCapLimit(path_, seg, on, [&](const Pt& q) { return v_tight_ + v_per_clear_ * pl.clearance(q.x, q.y); },
+                                                               a_brake_, react_time_, horizon));
+        // whatever the camera / lidars cannot see yet: stop within their range
+        speed_.v_horizon = approachSpeed(max_obs_range_ - planner_->frontExtent() - stop_margin_, a_brake_, react_time_);
         double v = speed_.v_max;
         speed_.limit = "v_max";
         for (const auto& l : {std::make_pair(speed_.v_dfree, "dfree"), std::make_pair(speed_.v_clear, "clearance"),
-                              std::make_pair(speed_.v_turn, "turn")})
+                              std::make_pair(speed_.v_turn, "turn"), std::make_pair(speed_.v_corner, "corner"),
+                              std::make_pair(speed_.v_horizon, "horizon")})
           if (l.first < v)
           {
             v = l.first;
             speed_.limit = l.second;
           }
         if (v > v_max_ - 0.01)
-          speed_.limit = "v_max";                   // e.g. the turn limit is 0.8 cos(0.5 deg): not limiting
+          speed_.limit = "v_max";                   // a limit within 1 cm/s of v_max is not limiting
         speed_.v_target = v;
         des_fx = v * ux;
         des_fy = v * uy;
@@ -755,6 +795,32 @@ private:
     if (dv > amax && std::hypot(des_fx, des_fy) > std::hypot(cur_fx, cur_fy) + 1e-3)
       speed_.limit = "accel";                       // still accelerating towards the target speed
     double fx = cur_fx + dx, fy = cur_fy + dy;
+    // The limiter turns the velocity only gradually, so at speed the robot keeps moving along its old
+    // direction for a while: brake for the red lines and the low wall along the direction it really
+    // moves in (the obstacles there are the safety layer's job).
+    const double vf = std::hypot(fx, fy);
+    if (vf > 1e-3)
+    {
+      const double lm = line_margin_base_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(1, 1)));
+      double up = -1e9, down = -1e9, front = -1e9, back = -1e9;      // footprint extents at this heading
+      for (const Pt& q : footprint_)
+      {
+        const double qx = c * q.x - s * q.y, qy = s * q.x + c * q.y;
+        up = std::max(up, qy);
+        down = std::max(down, -qy);
+        front = std::max(front, qx);
+        back = std::max(back, -qx);
+      }
+      const double dl = distanceToBounds(F.x, F.y, fx / vf, fy / vf, keep_.back_wall_x + back, keep_.front_wall_x - front,
+                                         -(keep_.red_inner - lm) + down, keep_.red_inner - lm - up);
+      speed_.v_line = approachSpeed(dl - stop_margin_, a_brake_, react_time_);
+      if (speed_.v_line < vf)
+      {
+        fx *= speed_.v_line / vf;
+        fy *= speed_.v_line / vf;
+        speed_.limit = "line";
+      }
+    }
     // base frame
     double bx = c * fx + s * fy, by = -s * fx + c * fy;
     // independent safety layer on the raw obstacle points
@@ -946,16 +1012,21 @@ private:
 
   void publishDebug()
   {
+    // speed limits are +inf when nothing limits (no corner ahead, moving away from every line):
+    // JSON has no inf, write the usual 99 ("not limiting")
+    const auto lim = [](double v) { return std::isfinite(v) ? std::min(v, 99.0) : 99.0; };
     std::ostringstream os;
     os << "{\"occupied_cells\": " << occupied_cells_ << ", \"path_ok\": " << (path_ok_ ? "true" : "false")
-       << ", \"waypoints\": " << path_.size() << ", \"v_limit\": " << last_vlimit_ << ", \"d_free\": " << last_dfree_
+       << ", \"waypoints\": " << path_.size() << ", \"v_limit\": " << lim(last_vlimit_) << ", \"d_free\": " << last_dfree_
        << ", \"safety\": " << (safety_active_ ? "true" : "false") << ", \"lines_accepted\": " << lines_accepted_
        << ", \"lines_rejected\": " << lines_rejected_ << ", \"walls_accepted\": " << walls_accepted_
        << ", \"walls_rejected\": " << walls_rejected_ << ", \"scale_x\": " << loc_.scaleX()
        << ", \"scale_y\": " << loc_.scaleY() << ", \"speed_limit\": \"" << (active() ? speed_.limit : "") << "\""
-       << ", \"v_cmd\": " << speed_.v_cmd << ", \"v_target\": " << speed_.v_target << ", \"v_max\": " << speed_.v_max
-       << ", \"v_dfree\": " << speed_.v_dfree << ", \"v_clearance\": " << speed_.v_clear << ", \"v_turn\": " << speed_.v_turn
-       << ", \"v_safety\": " << speed_.v_safety << ", \"build_ms\": " << build_ms_ << ", \"plan_ms\": " << plan_ms_
+       << ", \"v_cmd\": " << speed_.v_cmd << ", \"v_target\": " << lim(speed_.v_target) << ", \"v_max\": " << speed_.v_max
+       << ", \"v_dfree\": " << lim(speed_.v_dfree) << ", \"v_clearance\": " << lim(speed_.v_clear) << ", \"v_turn\": " << lim(speed_.v_turn)
+       << ", \"v_corner\": " << lim(speed_.v_corner) << ", \"corner_at\": " << speed_.corner_at
+       << ", \"v_horizon\": " << lim(speed_.v_horizon) << ", \"v_line\": " << lim(speed_.v_line)
+       << ", \"v_safety\": " << lim(speed_.v_safety) << ", \"build_ms\": " << build_ms_ << ", \"plan_ms\": " << plan_ms_
        << ", \"max_plan_ms\": " << max_plan_ms_ << "}";
     std_msgs::String m;
     m.data = os.str();
@@ -966,7 +1037,7 @@ private:
   ros::NodeHandle pnh_;
   std::string sensor_, reason_, tuning_file_;
   double rate_ = 20, plan_rate_ = 10, mapping_duration_ = 1, max_imu_step_ = 0.3;
-  double v_max_, a_max_, a_brake_, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
+  double v_max_, a_max_, a_brake_, react_time_ = 0.1, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
   double safety_margin_, max_obs_range_, line_margin_base_, line_margin_sigma_, no_path_timeout_;
   double clear_margin_ = 0.02, clear_sigmas_ = 2.0, recovery_after_ = 1.0;
   std::vector<float> sigma_table_;                 // range uncertainty per cm of range (camera), empty = lidar
@@ -1000,7 +1071,8 @@ private:
   // speed limits of the last control cycle (m/s; 99 = not limiting) and which one decided
   struct SpeedInfo
   {
-    double v_max = 0, v_dfree = 99, v_clear = 99, v_turn = 99, v_safety = 99, v_target = 0, v_cmd = 0;
+    double v_max = 0, v_dfree = 99, v_clear = 99, v_turn = 99, v_corner = 99, v_horizon = 99, v_line = 99, v_safety = 99;
+    double v_target = 0, v_cmd = 0, corner_at = -1;   // corner_at: path distance to the limiting corner [m]
     std::string limit;
   } speed_;
   int lines_accepted_ = 0, lines_rejected_ = 0, walls_accepted_ = 0, walls_rejected_ = 0;

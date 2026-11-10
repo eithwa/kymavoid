@@ -19,6 +19,7 @@ const TUNABLES = [
     ['v_max', '最高速度', 'm/s', 0.05],
     ['a_max', '加速度', 'm/s²', 0.1],
     ['a_brake', '煞車減速度', 'm/s²', 0.1],
+    ['react_time', '反應時間', 's', 0.02],
     ['stop_margin', '停車餘量', 'm', 0.01],
     ['v_tight', '零間隙速度', 'm/s', 0.05],
     ['v_per_clearance', '每公尺間隙加速', 'm/s/m', 0.5],
@@ -52,6 +53,9 @@ const LIMITS = {
   clearance: ['間隙', '#d29922'],
   dfree: ['前方煞車距離', '#ff7b72'],
   safety: ['安全層', '#f85149'],
+  corner: ['前方彎道', '#f778ba'],
+  horizon: ['感測距離', '#39c5cf'],
+  line: ['紅線/牆', '#ffa657'],
   no_path: ['沒有路徑', '#8b949e'],
 };
 
