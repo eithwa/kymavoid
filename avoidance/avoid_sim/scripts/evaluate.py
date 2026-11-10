@@ -333,6 +333,11 @@ def summary(rows, csv_path):
         hit = [r for r in ok if r.get('min_wall', 9.0) <= 0]
         print(' | wall after goal: min %.3f m, %d hit' % (min(r.get('min_wall', 9.0) for r in ok), len(hit)), end='')
     print()
+    if rows:
+        # localisation along x (only the low walls correct it): the largest error of each run
+        mx = np.array([r['max_err_x'] for r in rows])
+        print('x localisation error (largest per run): median %.3f m, max %.3f m, runs over 0.2 m: %d of %d'
+              % (np.median(mx), mx.max(), int((mx > 0.2).sum()), len(rows)))
     fails = {}
     for r in rows:
         if r['result'] != 'success':
