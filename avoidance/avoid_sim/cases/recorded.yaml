@@ -99,3 +99,23 @@ cases:
   observed: timeout 40 s（2026-11-10，依精度清除之後）；之前 success 21.3 s
   expect: {result: success, max_time: 25.0}
   status: open
+- id: classic-l-gap-deadlock
+  recorded: 2026-11-10 14:45
+  sensor: camera
+  seed: 3268
+  layout: classic
+  start: [-2.0, 0.0, 0.0]
+  obstacles:
+  - [1.01, 0.53]
+  - [-1.1, 0.85]
+  - [1.85, -0.84]
+  - [-0.83, -0.59]
+  - [1.0, 0.0]
+  - [0.51, 0.98]
+  - [0.48, -1.04]
+  - [0.06, 0.01]
+  note: 原始 world 的 L 形縫（先往下穿過 (0.06, 0.01) 和 (1.0, 0.0) 之間 49 cm 的縫，再往右）。規劃器一直有路，安全層要 3 cm 餘量、地圖有 1-2 cm 雜訊，所以一直判
+    0：在縫口或轉角卡死。安全層餘量改 1 cm、已在餘量內的格子只禁止更靠近之後修好。
+  observed: 修正前（v_max 3）兩次都卡在縫裡超過 40 s，使用者那次還衝到紅線；修正後 17.1 s、21.3 s 到終點，最近障礙物 1.3-1.5 cm（2026-11-10）
+  expect: {result: success, max_time: 30.0}
+  status: fixed
