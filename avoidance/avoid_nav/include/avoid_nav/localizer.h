@@ -13,10 +13,19 @@
 //
 // The lines are absolute references: the pose does not drift along their normals while one is in
 // view, and a crooked start (placement error) is corrected as soon as a line is seen.
+//
+// x is corrected only by the front / back low walls. A front / back wall that should be in view but
+// has not matched for lost_scans scans is searched for in a wider band (lost_gate) and, if a long
+// straight fit turns up, the pose and the scale uncertainty along it are widened first so that the
+// fit is accepted (2026-11-10). Before, once the x error exceeded the 35 cm association gate the
+// wall never matched again and x drifted to -0.6 m: the robot was past the goal line without knowing
+// it and pushed into the wall. (Most of that error came from a camera latency 40-55 ms longer than
+// camera_adapter assumed: camera.yaml latency, avoid_sim's virtual camera.)
 #pragma once
 #include <Eigen/Dense>
 
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -63,6 +72,10 @@ struct LocalizerParams
   double sigma_rho_floor = 0.015, sigma_rho_quad = 0.015;   // + quad * rho^2: the camera coarsens with range
   double sigma_alpha_floor = 0.6 * M_PI / 180;
   double innovation_gate = 9.21;     // chi-square, 2 dof, 99 %
+  int lost_scans = 15;               // front / back wall expected in view, unmatched this many scans: ...
+  double lost_gate = 0.6;            // [m] ... search this far (boxes stay >= 0.75 m from those walls)
+  double lost_min_spread = 0.5;      // [m] ... and accept only a long,
+  double lost_max_rms = 0.03;        // [m] ... straight fit
 };
 
 class Localizer
@@ -80,6 +93,8 @@ public:
     P_(2, 2) = p_.sigma_theta0 * p_.sigma_theta0;
     P_(3, 3) = p_.sigma_sx0 * p_.sigma_sx0;
     P_(4, 4) = p_.sigma_sy0 * p_.sigma_sy0;
+    lost_.clear();
+    reacquired_ = 0;
   }
 
   // vx, vy: body velocity [m/s]; dtheta: heading change from the IMU [rad]
@@ -119,13 +134,23 @@ public:
     std::vector<LineFit> fits;
     for (const FieldLine& L : lines)
     {
-      LineFit f = fit(pts, L, max_range);
+      const bool x_ref = std::fabs(L.nx) > 0.9;                // the low wall in front of / behind the course
+      const double rho_hat = L.c - (L.nx * s_(0) + L.ny * s_(1));
+      const bool expected = rho_hat > 0.3 && rho_hat < max_range - 0.2;
+      int& lost = lost_[L.name];
+      const bool wide = x_ref && lost >= p_.lost_scans;
+      LineFit f = fit(pts, L, max_range, wide);
       if (f.ok)
-        apply(L, f);
+        apply(L, f, wide);
+      if (f.accepted && wide)
+        ++reacquired_;
+      lost = (f.accepted || !expected) ? 0 : lost + 1;
       fits.push_back(f);
     }
     return fits;
   }
+
+  int reacquired() const { return reacquired_; }   // wide-band re-matches of a lost front / back wall
 
   double x() const { return s_(0); }
   double y() const { return s_(1); }
@@ -135,7 +160,7 @@ public:
   const Mat5& cov() const { return P_; }
 
 private:
-  LineFit fit(const std::vector<Pt>& pts, const FieldLine& L, double max_range) const
+  LineFit fit(const std::vector<Pt>& pts, const FieldLine& L, double max_range, bool wide = false) const
   {
     LineFit f;
     f.name = L.name;
@@ -155,7 +180,7 @@ private:
       const double off = L.nx * fx + L.ny * fy - L.c;                     // signed distance to the line
       const double along = -L.ny * fx + L.nx * fy;
       const double sig = std::sqrt(var_n + r * r * P_(2, 2));
-      const double gate = std::min(p_.line_gate_max, std::max(p_.line_gate_min, 3.0 * sig + 0.03));
+      const double gate = wide ? p_.lost_gate : std::min(p_.line_gate_max, std::max(p_.line_gate_min, 3.0 * sig + 0.03));
       if (std::fabs(off) <= gate && along >= L.t_min - 0.1 && along <= L.t_max + 0.1)
         sel.push_back(b);
     }
@@ -205,15 +230,27 @@ private:
         break;
     }
     f.ok = f.n >= p_.line_min_points && f.spread >= p_.line_min_spread;
+    if (wide)
+      f.ok = f.ok && f.spread >= p_.lost_min_spread && f.rms <= p_.lost_max_rms;
     return f;
   }
 
-  void apply(const FieldLine& L, LineFit& f)
+  void apply(const FieldLine& L, LineFit& f, bool wide = false)
   {
     const double th = s_(2);
     const double rho_hat = L.c - (L.nx * s_(0) + L.ny * s_(1));          // robot to line along n
     const double alpha_hat = wrapAngle(std::atan2(L.ny, L.nx) - th);      // n seen from the robot
     Eigen::Vector2d innov(f.rho - rho_hat, wrapAngle(f.alpha - alpha_hat));
+    if (wide)
+    {
+      // re-matching a lost wall: the filter was too sure of itself. Widen the pose along the normal
+      // by the innovation, and the scale errors back to their prior, so the fit is taken.
+      Eigen::Matrix<double, 5, 1> gn;
+      gn << L.nx, L.ny, 0, 0, 0;
+      P_ += gn * gn.transpose() * (innov(0) * innov(0));
+      P_(3, 3) = std::max(P_(3, 3), p_.sigma_sx0 * p_.sigma_sx0);
+      P_(4, 4) = std::max(P_(4, 4), p_.sigma_sy0 * p_.sigma_sy0);
+    }
     Eigen::Matrix<double, 2, 5> H;
     H << -L.nx, -L.ny, 0, 0, 0, 0, 0, -1, 0, 0;
     const double sr = std::max(p_.sigma_rho_floor, f.rms / std::sqrt(f.n)) + p_.sigma_rho_quad * f.rho * f.rho;
@@ -234,5 +271,7 @@ private:
   LocalizerParams p_;
   Eigen::Matrix<double, 5, 1> s_;
   Mat5 P_;
+  std::map<std::string, int> lost_;    // per line: scans in a row expected in view but not matched
+  int reacquired_ = 0;
 };
 }  // namespace avoid_nav

@@ -558,6 +558,7 @@ private:
       const std::vector<Pt> cells = grid_.occupied();
       Keepout k = keep_;
       k.line_margin = line_margin_base_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(1, 1)));
+      k.goal_x += finishMargin();                                // the path reaches the finish condition
       auto pl = std::make_shared<GridPlanner>(planner_template_);   // copied under the lock: start replaces it
       const std::vector<Pt> previous = path_ok_ ? path_ : std::vector<Pt>();
       const double v0 = std::hypot(cmd_.linear.x, cmd_.linear.y);
@@ -882,6 +883,11 @@ private:
     return out;
   }
 
+  // How far past the goal line the estimated front must be to call it finished: an x estimate a few
+  // cm ahead of the truth made the robot stop short of the line (+3.6 cm once). The planner's goal
+  // is moved by the same margin so the path reaches it; the wall margin leaves room behind the line.
+  double finishMargin() const { return 0.03 + 2.0 * std::sqrt(std::max(0.0, loc_.cov()(0, 0))); }
+
   void tick(const ros::TimerEvent&)
   {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -902,7 +908,7 @@ private:
         setState(RUNNING, "start map done");
       if (state_ == RUNNING)
       {
-        if (F.x + planner_->frontExtent() >= keep_.goal_x)
+        if (F.x + planner_->frontExtent() >= keep_.goal_x + finishMargin())
         {
           finish_time_ = (now - start_time_).toSec();
           std::ostringstream os;
