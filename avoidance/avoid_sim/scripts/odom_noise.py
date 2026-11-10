@@ -9,6 +9,7 @@ the true motion into what the robot would measure:
 The true pose comes from planar_move (/sim/odom_true, world = field frame).
 """
 import math
+import threading
 
 import numpy as np
 import rospy
@@ -39,12 +40,17 @@ class OdomNoise:
         self.odom_pub = rospy.Publisher('/odom', Odometry, queue_size=10)
         self.imu_pub = rospy.Publisher('/imu/yaw', Float64, queue_size=10)
         self.tfb = tf2_ros.TransformBroadcaster()
+        self.lock = threading.Lock()          # reset_event and odometry callbacks run in different threads
         self.new_run()
         # reseeded on every field reset, so a seed reproduces the same odometry errors
         rospy.Subscriber('/avoid_sim/reset_event', Header, lambda ev: self.new_run(ev.seq))
         rospy.Subscriber('/sim/odom_true', Odometry, self.on_truth, queue_size=50)
 
     def new_run(self, seed=None):
+        with self.lock:
+            self._new_run(seed)
+
+    def _new_run(self, seed):
         if seed is not None:
             self.rng = np.random.default_rng(int(seed) * 7919 + 1)
         self.scale = 1.0 + self.rng.normal(0.0, self.scale_std)
@@ -54,6 +60,10 @@ class OdomNoise:
         self.last = None
 
     def on_truth(self, msg):
+        with self.lock:
+            self._on_truth(msg)
+
+    def _on_truth(self, msg):
         t = msg.header.stamp.to_sec()
         x, y = msg.pose.pose.position.x, msg.pose.pose.position.y
         yaw = yaw_of(msg.pose.pose.orientation)

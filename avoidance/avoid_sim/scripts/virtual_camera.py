@@ -8,6 +8,7 @@ noise, dropouts, latency.
 """
 import collections
 import math
+import threading
 
 import numpy as np
 import rospy
@@ -37,6 +38,7 @@ class VirtualCamera:
         self.latency = p('latency', 0.03)
         self.rng = np.random.default_rng(p('seed', 0) or None)
         self.history = collections.deque(maxlen=200)
+        self.lock = threading.Lock()          # history is filled by the odometry callback, read by the timer
         self.obstacles = []
         self.black_pub = rospy.Publisher('/vision/BlackRealDis', Int32MultiArray, queue_size=1)
         self.red_pub = rospy.Publisher('/vision/redRealDis', Int32MultiArray, queue_size=1)
@@ -48,24 +50,38 @@ class VirtualCamera:
         rospy.Timer(rospy.Duration(1.0 / p('rate', 30.0)), self.tick)
 
     def on_layout(self, msg):
-        self.obstacles = [(q.position.x, q.position.y) for q in msg.poses]
-        self.history.clear()                                            # the robot was teleported
+        with self.lock:
+            self.obstacles = [(q.position.x, q.position.y) for q in msg.poses]
+            self.history.clear()                                        # the robot was teleported
 
     def on_truth(self, msg):
         q = msg.pose.pose
-        self.history.append((msg.header.stamp.to_sec(), q.position.x, q.position.y, yaw_of(q.orientation)))
+        with self.lock:
+            self.history.append((msg.header.stamp.to_sec(), q.position.x, q.position.y, yaw_of(q.orientation)))
 
     def pose_at(self, t):
-        for s in reversed(self.history):
+        with self.lock:
+            hist = list(self.history)
+        for s in reversed(hist):
             if s[0] <= t:
                 return s[1:]
-        return self.history[0][1:] if self.history else None
+        return hist[0][1:] if hist else None
 
     def tick(self, _):
+        # an exception would end the rospy timer for good: the camera would go silent while the node
+        # still answers pings (the web UI then shows the camera data stale, the node alive)
+        try:
+            self.publish()
+        except Exception as e:
+            rospy.logerr_throttle(5, 'virtual_camera: %s' % e)
+
+    def publish(self):
         pose = self.pose_at(rospy.Time.now().to_sec() - self.latency)
         if pose is None:
             return
-        black, red = self.renderer.render(*pose, self.obstacles)
+        with self.lock:
+            obstacles = list(self.obstacles)
+        black, red = self.renderer.render(*pose, obstacles)
         self.black_pub.publish(Int32MultiArray(data=self.scanner.scan(
             black, self.pixel_noise, self.dropout, self.rng).tolist()))
         self.red_pub.publish(Int32MultiArray(data=self.scanner.scan(

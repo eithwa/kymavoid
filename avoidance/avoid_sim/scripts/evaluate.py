@@ -25,6 +25,7 @@ import csv
 import math
 import os
 import sys
+import threading
 import time
 
 import numpy as np
@@ -216,6 +217,7 @@ class Evaluator:
         self.command.wait_for_service()
         self.truth, self.est, self.status = {}, {}, {}
         self.hist = collections.deque(maxlen=200)   # (t, x, y, yaw) of the truth, to compare at the estimate's stamp
+        self.lock = threading.Lock()                # hist: appended by the subscriber thread, read by run()
         # queue_size=1: never judge on a backlog of old poses
         rospy.Subscriber('/sim/odom_true', Odometry, self.on_truth, queue_size=1)
         rospy.Subscriber('/avoid/pose', PoseWithCovarianceStamped, lambda m: self.est.update(
@@ -225,8 +227,9 @@ class Evaluator:
 
     def on_truth(self, m):
         p = (m.pose.pose.position.x, m.pose.pose.position.y, yaw_of(m.pose.pose.orientation))
-        self.truth.update(p=p, t=m.header.stamp.to_sec())
-        self.hist.append((m.header.stamp.to_sec(),) + p)
+        with self.lock:
+            self.truth.update(p=p, t=m.header.stamp.to_sec())
+            self.hist.append((m.header.stamp.to_sec(),) + p)
 
     def sensor(self):
         t0 = time.time()
@@ -235,7 +238,8 @@ class Evaluator:
         return self.status['s'].sensor_config if 's' in self.status else 'unknown'
 
     def truth_at(self, t):
-        h = list(self.hist)
+        with self.lock:
+            h = list(self.hist)
         for a, b in zip(reversed(h[:-1]), reversed(h)):
             if a[0] <= t <= b[0]:
                 w = (t - a[0]) / max(b[0] - a[0], 1e-9)
