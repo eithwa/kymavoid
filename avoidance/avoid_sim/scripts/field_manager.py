@@ -2,8 +2,9 @@
 """Spawns the obstacles and serves /avoid_sim/reset and /avoid_sim/save_case.
 
 reset: pause physics -> robot back to the start pose (optionally with a placement error, or an
-explicit pose) -> obstacles re-placed (random to spec with a seed, the original 'classic' layout,
-or explicit centres from a recorded case) -> publish the layout (latched) and an event so the other
+explicit pose) -> obstacles re-placed (random to spec with a seed; 'route': random without the gap
+spec, only one route of route_width guaranteed; the original 'classic' layout; or explicit centres
+from a recorded case) -> publish the layout (latched) and an event so the other
 sim nodes can reset -> unpause.
 save_case: append the current field to a case file in avoid_sim/cases (avoid_sim.cases).
 """
@@ -23,7 +24,8 @@ from std_msgs.msg import Header
 from std_srvs.srv import Empty
 
 from avoid_sim import cases
-from avoid_sim.geometry import CLASSIC_LAYOUT, Field, layout_violations, load_footprint, sample_layout, ConfigSpace
+from avoid_sim.geometry import (CLASSIC_LAYOUT, Field, layout_violations, load_footprint, sample_layout,
+                                sample_layout_route, ConfigSpace)
 
 ROBOT = 'avoid_robot'
 GUI_POSE_SPACING = 0.05   # [s] wall time before each model placement (Gazebo's pose/info is limited to 60 Hz)
@@ -106,6 +108,8 @@ class FieldManager:
             layout_name = layout_name or 'case'
         elif layout_name == 'classic':
             layout = list(CLASSIC_LAYOUT[:self.f.count])
+        elif layout_name == 'route':
+            layout, attempts = sample_layout_route(self.f, self.footprint, rng)
         else:
             layout, attempts = sample_layout(self.f, self.footprint, rng)
         if start:
@@ -148,9 +152,11 @@ class FieldManager:
         res.start = Pose2D(sx, sy, syaw)
         res.obstacles = [Pose2D(x, y, 0.0) for x, y in layout]
         bad = layout_violations(layout, self.f)
-        ok = ConfigSpace(self.f, self.footprint).reachable(layout, (sx, sy))
-        res.message = '%s layout, seed %d, %d rejected, gap violations %d, reachable %s' % (
-            layout_name, seed, attempts, len(bad), ok)
+        cs = ConfigSpace(self.f, self.footprint)
+        ok = cs.reachable(layout, (sx, sy))
+        route = cs.route_wide(layout, self.f.route_width, (sx, sy))
+        res.message = '%s layout, seed %d, %d rejected, gap violations %d, reachable %s, %.2f m route %s' % (
+            layout_name, seed, attempts, len(bad), ok, self.f.route_width, route)
         return res
 
     def handle_reset(self, req):

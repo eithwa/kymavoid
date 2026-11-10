@@ -6,7 +6,7 @@
 <launch>
   <arg name="gui" default="true"/>
   <arg name="sensor" default="camera"/>
-  <arg name="layout" default="random"/>   <!-- random | classic -->
+  <arg name="layout" default="random"/>   <!-- random | route | classic -->
   <arg name="seed" default="1"/>          <!-- < 0: random seed -->
   <arg name="paused" default="false"/>
 

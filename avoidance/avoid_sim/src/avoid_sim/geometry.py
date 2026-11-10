@@ -35,6 +35,7 @@ class Field:
     gap_metric: str = 'axis'
     obs_x_min: float = -1.3
     obs_x_max: float = 2.5
+    route_width: float = 0.50     # 'route' layouts: no gap spec, but one route at least this wide
 
     @property
     def red_inner(self):
@@ -54,7 +55,8 @@ class Field:
             wall_thickness=field['wall_thickness'], wall_height=field['wall_height'],
             count=obstacles['count'], size=obstacles['size'], height=obstacles['height'],
             min_gap=obstacles['min_gap'], gap_metric=obstacles['gap_metric'],
-            obs_x_min=obstacles['x_min'], obs_x_max=obstacles['x_max'])
+            obs_x_min=obstacles['x_min'], obs_x_max=obstacles['x_max'],
+            route_width=obstacles.get('route_width', 0.50))
 
     @staticmethod
     def from_yaml(path):
@@ -163,6 +165,60 @@ class ConfigSpace:
         cv2.floodFill(free, mask, (col, r), 2, flags=4)
         goal_col = int(math.ceil((self.f.goal_line_x - self.front - self.x0) / self.res))
         return bool((free[:, goal_col:] == 2).any())
+
+    def route_wide(self, layout, width, start=None):
+        """Is there a route at least `width` wide from the start to the goal line?
+
+        A disc of diameter `width` must be able to travel from the start until it touches the goal
+        line without touching an obstacle or a red line. Width measured in every direction, diagonal
+        passages too; the robot (40 cm, 44.5 cm across its corners) fits through any such route."""
+        r = int(math.ceil(width / 2 / self.res))
+        disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+        c = cv2.dilate(self.occupancy(layout), disc, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        sx, sy = start if start is not None else (self.f.start_x, self.f.start_y)
+        row, col = self.cell(sx, sy)
+        if c[row, col]:
+            return False
+        free = (1 - c).astype(np.uint8)
+        mask = np.zeros((self.ny + 2, self.nx + 2), np.uint8)
+        cv2.floodFill(free, mask, (col, row), 2, flags=4)
+        goal_col = int(math.ceil((self.f.goal_line_x - width / 2 - self.x0) / self.res))
+        return bool((free[:, goal_col:] == 2).any())
+
+
+def _boxes_in_range(f, rng, accept):
+    """f.count box centres drawn in the obstacle area, off the start, each passing accept(p, placed)."""
+    y_lim = f.red_inner - f.size / 2                                         # boxes stay inside the lines
+    start_box = (f.start_x - 0.25, f.start_y - 0.25, f.start_x + 0.25, f.start_y + 0.25)
+    layout = []
+    for _ in range(f.count):
+        for _ in range(400):
+            p = (rng.uniform(f.obs_x_min, f.obs_x_max), rng.uniform(-y_lim, y_lim))
+            bx = f.obstacle_box(*p)
+            if not (bx[2] < start_box[0] or bx[0] > start_box[2] or bx[3] < start_box[1] or bx[1] > start_box[3]):
+                continue
+            if accept(p, layout):
+                layout.append(p)
+                break
+        else:
+            return None
+    return layout
+
+
+def sample_layout_route(f, footprint, rng, max_attempts=20000):
+    """Random obstacle layout without the gap spec: boxes may stand at any distance from each other
+    (touching, never overlapping), so slits narrower than the robot appear. The only requirement is
+    one route at least f.route_width wide from the start to the goal line.
+
+    Returns (layout, attempts) where attempts counts rejected candidate layouts."""
+    cs = ConfigSpace(f, footprint)
+    attempts = 0
+    while attempts < max_attempts:
+        layout = _boxes_in_range(f, rng, lambda p, placed: all(pair_gap(p, q, f.size, 'axis') >= 0 for q in placed))
+        if layout is not None and cs.route_wide(layout, f.route_width):
+            return layout, attempts
+        attempts += 1
+    raise RuntimeError('no layout with a %.2f m route after %d attempts' % (f.route_width, max_attempts))
 
 
 def sample_layout(f, footprint, rng, max_attempts=20000):

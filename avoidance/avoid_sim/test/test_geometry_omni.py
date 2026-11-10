@@ -12,7 +12,7 @@ import rospkg
 import yaml
 
 from avoid_sim.geometry import (CLASSIC_LAYOUT, ConfigSpace, Field, layout_violations, load_footprint,
-                                pair_gap, sample_layout)
+                                pair_gap, sample_layout, sample_layout_route)
 from avoid_sim.omni import NO_HIT, MaskRenderer, OmniModel, Scanner
 
 RP = rospkg.RosPack()
@@ -39,6 +39,33 @@ class GeometryTest(unittest.TestCase):
             ylim = FIELD.red_inner - FIELD.size / 2
             for x, y in layout:
                 self.assertTrue(FIELD.obs_x_min <= x <= FIELD.obs_x_max and abs(y) <= ylim + 1e-9)
+
+    def test_route_layouts_ignore_the_gap_spec_but_keep_a_wide_route(self):
+        cs = ConfigSpace(FIELD, FOOT)
+        with_violations = 0
+        for seed in range(20):
+            layout, _ = sample_layout_route(FIELD, FOOT, np.random.default_rng(seed))
+            self.assertEqual(len(layout), FIELD.count)
+            self.assertTrue(cs.route_wide(layout, FIELD.route_width), 'seed %d' % seed)
+            self.assertTrue(cs.reachable(layout), 'seed %d' % seed)
+            for i in range(len(layout)):                                    # touching is fine, overlapping is not
+                for j in range(i + 1, len(layout)):
+                    self.assertGreaterEqual(pair_gap(layout[i], layout[j], FIELD.size, 'axis'), 0.0)
+            with_violations += bool(layout_violations(layout, FIELD))
+        self.assertGreater(with_violations, 10)                              # boxes closer than the spec: the point
+
+    def test_route_width(self):
+        # a wall of boxes across the corridor with one gap: a disc of route_width must fit through it
+        cs = ConfigSpace(FIELD, FOOT)
+        for gap, wide in ((0.53, True), (0.48, False)):                      # grid: conservative by ~2 cm
+            layout = []
+            for side in (1, -1):
+                y = gap / 2 + FIELD.size / 2
+                while y - FIELD.size / 2 < FIELD.red_inner:
+                    layout.append((0.0, side * y))
+                    y += FIELD.size
+            self.assertEqual(cs.route_wide(layout, 0.50), wide, 'gap %.3f' % gap)
+            self.assertTrue(cs.reachable(layout))                             # the 40 cm robot passes both
 
     def test_classic_layout_breaks_the_gap_spec(self):
         bad = layout_violations(CLASSIC_LAYOUT, FIELD)

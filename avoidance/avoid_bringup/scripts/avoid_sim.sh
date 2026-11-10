@@ -2,7 +2,7 @@
 # Simulation in one command: tmux session "avoid_sim" with Gazebo (avoid_sim), nav_node, rosbridge,
 # the web UI and a status monitor. Pure Gazebo: no robot drivers.
 #
-#   avoid_sim.sh [camera|lidar] [--no-gui] [--seed N] [--layout random|classic] [--no-attach]
+#   avoid_sim.sh [camera|lidar] [--no-gui] [--seed N] [--layout random|route|classic] [--no-attach]
 set -e
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 

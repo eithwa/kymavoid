@@ -6,7 +6,7 @@
   <arg name="bridge_port" default="9090"/>
   <arg name="mjpeg_port" default="8080"/>
   <arg name="gui" default="true"/>
-  <arg name="layout" default="random"/>   <!-- random | classic -->
+  <arg name="layout" default="random"/>   <!-- random | route | classic -->
   <arg name="seed" default="1"/>
   <include file="$(find avoid_sim)/launch/sim.launch">
     <arg name="sensor" value="$(arg sensor)"/>
