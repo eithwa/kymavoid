@@ -98,6 +98,23 @@ roslaunch avoid_bringup real.launch sensor:=lidar lidar_port_0:=/dev/ttyACM0 ...
 rosrun avoid_bringup web_server.py 8000
 ```
 
+## 在編譯機上編譯與測試
+
+本機跑模擬會把 CPU 吃滿，測試結果也會失真。`remote/remote.sh` 把原始碼同步到編譯機，在專用容器（ROS Noetic + Gazebo 11，網路獨立，不會碰到那台機器上其他的 ROS）裡編譯和測試，結果拉回 `remote_results/<tag>/`。
+
+```bash
+echo 'KYM_REMOTE_HOST=<帳號>@<編譯機>' > avoidance/avoid_bringup/remote/remote.env   # 第一次（不進版控）
+avoidance/avoid_bringup/remote/remote.sh setup         # 第一次：在編譯機建映像檔
+avoidance/avoid_bringup/remote/remote.sh test          # 同步工作目錄 → 編譯 → gtest + avoid_sim unittest
+avoidance/avoid_bringup/remote/remote.sh eval --set v_max=3 -- --seeds 1-20
+avoidance/avoid_bringup/remote/remote.sh eval -- --cases recorded.yaml
+avoidance/avoid_bringup/remote/remote.sh eval --set /virtual_camera/latency=0.1 -- --layout classic --seeds 3268
+```
+
+- 預設同步整個工作目錄（含還沒 commit 的修改）；只測某個 commit 加幾個檔案用 `--rev HEAD --with <檔案>`。
+- `--set key=value` 設 nav_node 參數；`/` 開頭的完整名稱在模擬啟動前設定。
+- `--help` 看全部選項。
+
 ## 改 port（同一台機器同時跑兩組時）
 
 ```bash

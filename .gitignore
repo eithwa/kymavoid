@@ -11,3 +11,7 @@ AvoidChallenge.yaml
 FIRA.yaml
 HSVcolormap.bin
 prosilica_driver.yaml
+
+# remote.sh (avoid_bringup/remote): local build-machine address, results copied back
+avoidance/avoid_bringup/remote/remote.env
+/remote_results/
