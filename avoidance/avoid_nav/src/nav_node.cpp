@@ -47,6 +47,7 @@
 #include "avoid_nav/planner.h"
 #include "avoid_nav/polygon.h"
 #include "avoid_nav/speed_limits.h"
+#include "avoid_nav/track.h"
 
 namespace avoid_nav
 {
@@ -210,7 +211,13 @@ private:
         {"stop_margin", &NavNode::stop_margin_, 0.03},
         {"v_tight", &NavNode::v_tight_, 0.15},             // speed with zero clearance
         {"v_per_clearance", &NavNode::v_per_clear_, 8.0},  // + this x clearance [m/s per m]
-        {"lookahead", &NavNode::lookahead_, 0.35},
+        {"lookahead", &NavNode::lookahead_, 0.35},       // pure pursuit only (tracker 0)
+        // 1: follow the planner path with its corners rounded (track.h); 0: pure pursuit (before 2026-11-10)
+        {"tracker", &NavNode::tracker_, 1.0},
+        {"keep_gap", &NavNode::keep_gap_, 0.08},         // [m] robot to obstacle a rounded corner keeps (less only where the path has less)
+        {"a_lat_frac", &NavNode::a_lat_frac_, 0.8},      // curvature speed limit plans with this x a_max (the rest corrects)
+        {"k_track", &NavNode::k_track_, 2.0},            // [1/s] cross-track gain
+        {"track_preview", &NavNode::track_preview_, 0.1},   // [s] steer along the tangent this far ahead (latency)
         {"route_keep", &NavNode::route_keep_, 0.7},       // A* cost x this near the current path (hysteresis)
         {"k_heading", &NavNode::k_heading_, 1.5},
         {"w_max", &NavNode::w_max_, 1.0},
@@ -525,6 +532,7 @@ private:
     grid_.clear();
     history_.clear();
     path_.clear();
+    ref_.clear();
     path_ok_ = false;
     occupied_cells_ = 0;                            // /avoid/debug must not keep showing the old map
     ++run_id_;                                      // plans computed before this are dropped
@@ -562,6 +570,14 @@ private:
       auto pl = std::make_shared<GridPlanner>(planner_template_);   // copied under the lock: start replaces it
       const std::vector<Pt> previous = path_ok_ ? path_ : std::vector<Pt>();
       const double v0 = std::hypot(cmd_.linear.x, cmd_.linear.y);
+      const bool track = tracker_ >= 0.5;
+      const double a_lat_frac = a_lat_frac_, a_max = a_max_;
+      RoundParams rp;
+      rp.keep = std::max(0.0, keep_gap_ - pl->params().obstacle_inflation);   // clearance is to the soft boundary
+      const double c = std::cos(F.th), s = std::sin(F.th);
+      const Pt vel{c * cmd_.linear.x - s * cmd_.linear.y, s * cmd_.linear.x + c * cmd_.linear.y};
+      // the plan is in use this much later: the last build + plan time, and a control period
+      const double lag = std::min(0.3, (build_ms_ + plan_ms_) * 1e-3 + 1.0 / rate_);
       lk.unlock();
 
       std::vector<Pt> obs;
@@ -578,7 +594,24 @@ private:
       const ros::WallTime w0 = ros::WallTime::now();
       pl->build(obs, F.th, k);
       const ros::WallTime w1 = ros::WallTime::now();
-      const bool ok = pl->plan(F.x, F.y, path, &previous, v0);
+      // Tracker: plan from where the robot will be when the plan is in use, and join the path the way
+      // the robot is moving (joinFromVelocity). Planned from the snapshot pose, at 1.1 m/s the robot was
+      // 20-30 cm further on a heading 20-30 deg off the new path's first leg when it got it: 12 cm off
+      // the reference at once, and 3.6 cm from a box the reference passed at 10 (seed 2).
+      Pt start{F.x, F.y};
+      const bool moving = track && v0 > 0.05;
+      if (moving && pl->free(F.x + vel.x * lag, F.y + vel.y * lag))
+        start = {F.x + vel.x * lag, F.y + vel.y * lag};
+      const bool ok = pl->plan(start.x, start.y, path, &previous, v0);
+      std::vector<RefPoint> ref;
+      if (ok && track)
+      {
+        std::vector<Pt> legs = path;
+        const auto clear = [&](double x, double y) { return pl->clearance(x, y); };
+        if (moving)
+          joinFromVelocity(legs, vel, a_lat_frac * a_max, clear, rp);
+        ref = roundedReference(legs, clear, rp);
+      }
       const ros::WallTime w2 = ros::WallTime::now();
       const ros::Time now = ros::Time::now();
 
@@ -587,6 +620,7 @@ private:
         continue;                                            // restarted or stopped meanwhile: drop it
       planner_ = pl;
       path_ = path;
+      ref_ = ref;
       path_ok_ = ok;
       occupied_cells_ = cells.size();
       build_ms_ = (w1 - w0).toSec() * 1e3;
@@ -609,6 +643,7 @@ private:
   void publishCleared(const ros::Time& now)
   {
     path_.clear();
+    ref_.clear();
     publishPath(now);
     sensor_msgs::PointCloud pc;
     pc.header.stamp = now;
@@ -625,7 +660,17 @@ private:
     nav_msgs::Path p;
     p.header.stamp = now;
     p.header.frame_id = "field";
-    for (const Pt& q : path_)
+    std::vector<Pt> pts;
+    if (!ref_.empty())                                // tracker: the rounded path the robot follows (every 4 cm)
+    {
+      for (size_t i = 0; i < ref_.size(); i += 2)
+        pts.push_back({ref_[i].x, ref_[i].y});
+      if (ref_.size() % 2 == 0)
+        pts.push_back({ref_.back().x, ref_.back().y});
+    }
+    else
+      pts = path_;
+    for (const Pt& q : pts)
     {
       geometry_msgs::PoseStamped ps;
       ps.header = p.header;
@@ -742,7 +787,48 @@ private:
     speed_ = SpeedInfo();
     speed_.v_max = v_max_;
     speed_.limit = "no_path";                       // braking unless a target is found below
-    if (path_ok_ && path_.size() >= 2)
+    track_err_ = 0;
+    if (path_ok_ && tracker_ >= 0.5 && ref_.size() >= 2)
+    {
+      // follow the rounded path (track.h): direction from the reference, speed from its clearance
+      // and curvature ahead; the line limits and the safety layer below stay as they are
+      TrackParams tp;
+      tp.v_tight = v_tight_;
+      tp.v_per_clearance = v_per_clear_;
+      tp.a_max = a_max_;
+      tp.a_brake = a_brake_;
+      tp.t_react = react_time_;
+      tp.a_lat = a_lat_frac_ * a_max_;
+      tp.preview_time = track_preview_;
+      tp.k_track = k_track_;
+      tp.horizon = v_max_ * react_time_ + v_max_ * v_max_ / (2 * a_brake_) + 0.3;
+      speed_.v_horizon = approachSpeed(max_obs_range_ - planner_->frontExtent() - stop_margin_, a_brake_, react_time_);
+      // the robot's own clearance too: off the reference it must slow down (and turn back within it)
+      const TrackStep st = trackStep(ref_, {F.x, F.y}, {cur_fx, cur_fy}, std::min(v_max_, speed_.v_horizon), tp,
+                                     planner_->clearance(F.x, F.y));
+      speed_.v_clear = st.v_clear;
+      speed_.v_corner = st.v_corner;
+      speed_.corner_at = st.corner_at;
+      speed_.v_turn = st.v_turn;
+      track_err_ = st.err;
+      double v = speed_.v_max;
+      speed_.limit = "v_max";
+      for (const auto& l : {std::make_pair(speed_.v_clear, "clearance"), std::make_pair(speed_.v_turn, "turn"),
+                            std::make_pair(speed_.v_corner, "corner"), std::make_pair(speed_.v_horizon, "horizon")})
+        if (l.first < v)
+        {
+          v = l.first;
+          speed_.limit = l.second;
+        }
+      if (v > v_max_ - 0.01)
+        speed_.limit = "v_max";
+      speed_.v_target = v;
+      des_fx = v * st.dir.x;
+      des_fy = v * st.dir.y;
+      last_vlimit_ = v;
+      last_dfree_ = 0;
+    }
+    else if (path_ok_ && path_.size() >= 2)
     {
       // Pure pursuit looks further ahead at speed: turning towards a target L away takes about v^2 / L
       // of lateral acceleration, and the command limiter only allows a_max.
@@ -1054,7 +1140,8 @@ private:
        << ", \"v_dfree\": " << lim(speed_.v_dfree) << ", \"v_clearance\": " << lim(speed_.v_clear) << ", \"v_turn\": " << lim(speed_.v_turn)
        << ", \"v_corner\": " << lim(speed_.v_corner) << ", \"corner_at\": " << speed_.corner_at
        << ", \"v_horizon\": " << lim(speed_.v_horizon) << ", \"v_line\": " << lim(speed_.v_line)
-       << ", \"v_safety\": " << lim(speed_.v_safety) << ", \"build_ms\": " << build_ms_ << ", \"plan_ms\": " << plan_ms_
+       << ", \"v_safety\": " << lim(speed_.v_safety) << ", \"tracker\": " << (tracker_ >= 0.5 ? "true" : "false")
+       << ", \"track_err\": " << track_err_ << ", \"ref_points\": " << ref_.size() << ", \"build_ms\": " << build_ms_ << ", \"plan_ms\": " << plan_ms_
        << ", \"max_plan_ms\": " << max_plan_ms_ << "}";
     std_msgs::String m;
     m.data = os.str();
@@ -1068,6 +1155,7 @@ private:
   double v_max_, a_max_, a_brake_, react_time_ = 0.1, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
   double safety_margin_, max_obs_range_, line_margin_base_, line_margin_sigma_, no_path_timeout_;
   double clear_margin_ = 0.02, clear_sigmas_ = 2.0, recovery_after_ = 1.0, route_keep_ = 0.7, wall_margin_ = 0.08;
+  double tracker_ = 1.0, keep_gap_ = 0.08, a_lat_frac_ = 0.8, k_track_ = 2.0, track_preview_ = 0.1;
   std::vector<float> sigma_table_;                 // range uncertainty per cm of range (camera), empty = lidar
   size_t occupied_cells_ = 0;
   bool recovered_ = false;
@@ -1093,6 +1181,8 @@ private:
   OccGrid grid_;                                    // obstacle layer, local frame
   std::deque<std::pair<double, Pose2>> history_;   // (time, local pose), last 2 s
   std::vector<Pt> path_;
+  std::vector<RefPoint> ref_;                       // path_ with its corners rounded (tracker), same planner_
+  double track_err_ = 0;                            // distance from the reference [m]
   bool path_ok_ = false, safety_active_ = false;
   double last_vlimit_ = 0, last_dfree_ = 0;
   double build_ms_ = 0, plan_ms_ = 0, max_plan_ms_ = 0;     // wall time of the last replan / worst this run

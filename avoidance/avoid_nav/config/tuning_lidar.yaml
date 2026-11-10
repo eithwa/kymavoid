@@ -7,7 +7,12 @@ react_time: 0.1           # [s] from seeing something to braking for it (sensor 
 stop_margin: 0.03         # [m] stop this short of the C-space boundary
 v_tight: 0.15             # [m/s] speed with zero clearance
 v_per_clearance: 8.0      # [m/s per m] extra speed per metre of clearance (3.0 crawled through wide gaps)
-lookahead: 0.35           # [m] (visible-target pursuit)
+lookahead: 0.35           # [m] (visible-target pursuit, tracker 0 only)
+tracker: 0                # 1: follow the path with rounded corners (track.h); 0: pure pursuit (tracker not evaluated with the lidars yet)
+keep_gap: 0.08            # [m] robot to obstacle a rounded corner keeps (less only where the path has less)
+a_lat_frac: 0.8           # corners planned at this x a_max of lateral acceleration (the rest corrects)
+k_track: 2.0              # [1/s] pull back onto the path
+track_preview: 0.1        # [s] steer along the path this far ahead (latency)
 route_keep: 0.7           # A* cost x this near the current path: a new route must be clearly better
 k_heading: 1.5            # heading P gain
 w_max: 1.0                # [rad/s]

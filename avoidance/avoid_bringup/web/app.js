@@ -25,7 +25,12 @@ const TUNABLES = [
     ['v_per_clearance', '每公尺間隙加速', 'm/s/m', 0.5],
   ]],
   ['路徑追蹤', [
-    ['lookahead', '前視距離', 'm', 0.05],
+    ['tracker', '循跡（1 = 圓角循跡，0 = pure pursuit）', '', 1],
+    ['keep_gap', '轉角保留距離（車身到障礙物）', 'm', 0.01],
+    ['a_lat_frac', '轉角側向加速度 × a_max', '', 0.05],
+    ['k_track', '拉回路徑增益', '1/s', 0.5],
+    ['track_preview', '預瞄時間', 's', 0.02],
+    ['lookahead', '前視距離（pursuit）', 'm', 0.05],
     ['route_keep', '路線遲滯（成本倍數）', '×', 0.05],
     ['k_heading', '航向增益', '', 0.1],
     ['w_max', '最大角速度', 'rad/s', 0.1],
