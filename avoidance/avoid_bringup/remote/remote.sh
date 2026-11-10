@@ -99,7 +99,10 @@ if [ $nosync = 0 ]; then
     echo "== sync: working tree ($(git -C "$REPO" rev-parse --short HEAD), $(git -C "$REPO" status --short | wc -l) changed files)"
   fi
   "${SSH[@]}" "mkdir -p ~/$DIR/repo ~/$DIR/ws/src ~/$DIR/results && ln -sfn ../../repo ~/$DIR/ws/src/kymavoid"
-  rsync -a --delete --exclude .git --exclude __pycache__ --exclude '*.pyc' --exclude /remote_results \
+  # By content, not by time: a changed file arrives with a new mtime, so make / cmake rebuild it. With
+  # -a the local mtime came along (git archive: the commit's), older than the remote build output,
+  # and changed sources or CMakeLists were silently not rebuilt.
+  rsync -rlpD --checksum --delete --exclude .git --exclude __pycache__ --exclude '*.pyc' --exclude /remote_results \
     --exclude 'avoidance/avoid_bringup/remote/remote.env' -e "ssh -o BatchMode=yes" "$src/" "$HOST:$DIR/repo/"
 fi
 

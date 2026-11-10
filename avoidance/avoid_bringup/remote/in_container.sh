@@ -33,6 +33,10 @@ unit_tests() {
     || { echo "test build FAILED: $KYM_OUT/build_tests.log"; tail -30 "$KYM_OUT/build_tests.log"; return 1; }
   # shellcheck source=/dev/null
   source devel/setup.bash
+  # every gtest registered in CMakeLists must have been built (a stale build system once left one out)
+  for t in $(sed -n 's/^ *catkin_add_gtest(\([a-z_0-9]*\) .*/\1/p' src/kymavoid/avoidance/avoid_nav/CMakeLists.txt); do
+    [ -x "devel/lib/avoid_nav/$t" ] || { echo "   $t: NOT BUILT (registered in CMakeLists)"; rc=1; }
+  done
   for t in devel/lib/avoid_nav/test_*; do
     [ -x "$t" ] || continue
     if "$t" > "$KYM_OUT/$(basename "$t").log" 2>&1; then
