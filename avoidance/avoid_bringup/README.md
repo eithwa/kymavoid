@@ -2,6 +2,17 @@
 
 避障挑戰的一鍵啟動（tmux）和網頁控制台，實車和模擬共用。設計見 [docs/avoidance-redesign-plan.md](../../docs/avoidance-redesign-plan.md) 第 6、7 節。
 
+## 編譯
+
+`catkin_make` 要在 workspace（`~/kymavoid_ws`，它的 `src/kymavoid` 連到這個 repo）執行，不是在 repo 目錄。repo 裡有些舊套件在 Noetic 編不過，所以第一次要指定套件清單：
+
+```bash
+cd ~/kymavoid_ws
+catkin_make -DCATKIN_WHITELIST_PACKAGES="vision;imu_3d;fira_status_plugin;nubot_common;nubot_description;nubot_gazebo;scan_tf;param_convey;mjpeg_server;strategy;fira_launch;avoid_msgs;avoid_nav;avoid_sim;avoid_bringup"
+```
+
+清單會記在 `build/CMakeCache.txt`，之後在同一個 workspace 直接 `catkin_make` 就好。如果某次只指定了部分套件，記住的清單也會跟著變成那幾個，要再用上面的完整清單跑一次。
+
 ## 啟動
 
 ```bash
