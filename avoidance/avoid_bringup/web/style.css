@@ -127,3 +127,29 @@ td:last-child { text-align: right; font-family: ui-monospace, monospace; }
 .toast.info { border-left-color: var(--accent); }
 .toast .t { font-weight: 600; }
 .toast .m { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
+
+#speed-block { margin-top: 8px; }
+.speed-row { display: flex; align-items: baseline; gap: 8px; }
+#speed-val { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 72px; }
+.speed-unit { color: var(--muted); }
+.limit-tag { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+#speed-actual { margin-left: auto; font-variant-numeric: tabular-nums; }
+.speed-bar { position: relative; height: 8px; background: var(--bg); border-radius: 4px; margin-top: 4px; overflow: hidden; }
+#speed-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--ok); border-radius: 4px; transition: width .1s; }
+#speed-bar-target { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; left: 0; opacity: .8; }
+.hint-row { justify-content: space-between; margin-top: -4px; flex-wrap: nowrap; }
+#start-hint { margin-top: 0; }
+#speed-chart { width: 100%; height: 120px; display: block; }
+#speed-card h3 { display: flex; justify-content: space-between; }
+#limit-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); margin-top: 4px; }
+#limit-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+.trail-legend i { display: inline-block; width: 50px; height: 8px; border-radius: 4px; margin-right: 4px; vertical-align: 0;
+  background: linear-gradient(90deg, #f85149, #f2c94c, #3fb950); }
+#case-form { margin-top: 8px; }
+#case-form summary { cursor: pointer; color: var(--accent); }
+#case-form input[type=text], #case-form textarea { width: 100%; margin-top: 6px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font-family: inherit; font-size: 13px; }
+#case-maxtime { width: 64px; }
+#case-file { width: 140px !important; margin-top: 0 !important; }
+#last-run .light { white-space: normal; align-items: flex-start; }
+#last-run .light .dot { margin-top: 4px; }

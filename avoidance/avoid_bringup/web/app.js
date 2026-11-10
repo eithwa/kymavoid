@@ -43,6 +43,17 @@ const TUNABLES = [
   ]],
 ];
 
+// nav_node /avoid/debug speed_limit: which limit decided the commanded speed
+const LIMITS = {
+  v_max: ['最高速度', '#3fb950'],
+  accel: ['加速中', '#58a6ff'],
+  turn: ['轉向', '#bc8cff'],
+  clearance: ['間隙', '#d29922'],
+  dfree: ['前方煞車距離', '#ff7b72'],
+  safety: ['安全層', '#f85149'],
+  no_path: ['沒有路徑', '#8b949e'],
+};
+
 const $ = (id) => document.getElementById(id);
 const now = () => performance.now() / 1000;
 
@@ -56,6 +67,7 @@ const S = {
   truth: null, layout: [], trail: [], truthTrail: [],
   isSim: false, sensor: null, nodes: null, nodesErr: null, watch: null, debug: null,
   rates: {}, runs: [], lastSeed: null,
+  speedHist: [], actualV: null, vmax: 0.8,
 };
 const topics = {};
 
@@ -131,7 +143,8 @@ async function onConnected() {
   subscribe('/avoid/nodes', 'std_msgs/String', onNodes);
   subscribe('/avoid/path', 'nav_msgs/Path', (m) => { S.path = m.poses.map((p) => [p.pose.position.x, p.pose.position.y]); }, { throttle_rate: 200 });
   subscribe('/avoid/obstacles', 'sensor_msgs/PointCloud', (m) => { S.obstacles = m.points; S.obstaclesAt = now(); });
-  subscribe('/avoid/debug', 'std_msgs/String', (m) => { try { S.debug = JSON.parse(m.data); } catch (e) { S.debug = { raw: m.data }; } }, { throttle_rate: 500 });
+  subscribe('/avoid/debug', 'std_msgs/String', onDebug, { throttle_rate: 90 });
+  subscribe('/odom', 'nav_msgs/Odometry', (m) => { if (!S.isSim) S.actualV = { v: Math.hypot(m.twist.twist.linear.x, m.twist.twist.linear.y), at: now() }; }, { throttle_rate: 100 });
   syncOptionalTopics();
   await loadStatic();
   detectMode();
@@ -216,16 +229,30 @@ function onStatus(m) {
   if (prev && prev !== m.state_name) onTransition(prev, m);
   if (m.state_name === 'MAPPING' || m.state_name === 'RUNNING') {
     const last = S.trail[S.trail.length - 1];
-    if (!last || Math.hypot(last[0] - m.pose.x, last[1] - m.pose.y) > 0.01) S.trail.push([m.pose.x, m.pose.y]);
+    if (!last || Math.hypot(last[0] - m.pose.x, last[1] - m.pose.y) > 0.01)
+      S.trail.push([m.pose.x, m.pose.y, Math.hypot(m.cmd.linear.x, m.cmd.linear.y)]);
     if (S.trail.length > 3000) S.trail.shift();
   }
 }
 
+function onDebug(m) {
+  try { S.debug = JSON.parse(m.data); } catch (e) { S.debug = { raw: m.data }; return; }
+  const st = S.status;
+  if (!st || !(st.state_name === 'RUNNING' || st.state_name === 'MAPPING')) return;
+  if (S.debug.v_max > 0) S.vmax = S.debug.v_max;
+  S.speedHist.push({
+    t: st.elapsed, cmd: S.debug.v_cmd, target: S.debug.v_target, limit: S.debug.speed_limit,
+    actual: S.actualV && now() - S.actualV.at < 0.5 ? S.actualV.v : null,
+  });
+  if (S.speedHist.length > 1200) S.speedHist.shift();
+}
+
 function onTransition(prev, m) {
   const active = (s) => s === 'MAPPING' || s === 'RUNNING';
-  if (active(m.state_name) && !active(prev)) { S.trail = []; S.truthTrail = []; }
+  if (active(m.state_name) && !active(prev)) { S.trail = []; S.truthTrail = []; S.speedHist = []; }
   if (m.state_name === 'FINISHED') {
-    addRun(`抵達終點 ${m.elapsed.toFixed(2)} s`, 'ok');
+    const sp = speedStats();
+    addRun(`抵達終點 ${m.elapsed.toFixed(2)} s${sp ? `（平均 ${sp.mean.toFixed(2)} m/s）` : ''}`, 'ok');
     toast(`抵達終點：${m.elapsed.toFixed(2)} s`, m.reason, 'ok');
   } else if (m.state_name === 'SAFE_STOP') {
     addRun(`異常停車：${m.reason}`, 'bad');
@@ -244,6 +271,7 @@ function addRun(text, kind) {
 function onTruth(m) {
   const p = m.pose.pose;
   S.truth = { x: p.position.x, y: p.position.y, th: yawOf(p.orientation), at: now() };
+  S.actualV = { v: Math.hypot(m.twist.twist.linear.x, m.twist.twist.linear.y), at: now() };
   const st = S.status && S.status.state_name;
   if (st === 'MAPPING' || st === 'RUNNING') {
     const last = S.truthTrail[S.truthTrail.length - 1];
@@ -370,6 +398,8 @@ function renderStatus() {
   $('pose-line').textContent = st ? `x ${st.pose.x.toFixed(3)}  y ${st.pose.y.toFixed(3)}  θ ${(st.pose.theta * 180 / Math.PI).toFixed(1)}°  ` +
     `v ${Math.hypot(st.cmd.linear.x, st.cmd.linear.y).toFixed(2)} m/s` : '';
 
+  renderSpeed(st);
+
   // start button: only when everything it needs is alive
   let why = '';
   if (!S.connected) why = 'rosbridge 未連線';
@@ -386,6 +416,104 @@ function renderStatus() {
   $('btn-start').disabled = !!why || running || busy.start;
   $('start-hint').textContent = why;
 }
+
+// ------------------------------------------------------------------ speed
+function speedStats() {
+  const h = S.speedHist.filter((p) => p.cmd !== undefined);
+  if (h.length < 2) return null;
+  const mean = h.reduce((a, p) => a + p.cmd, 0) / h.length;
+  const share = {};
+  for (const p of h) share[p.limit] = (share[p.limit] || 0) + 1;
+  return { mean, share, n: h.length };
+}
+
+function renderSpeed(st) {
+  const d = S.debug || {};
+  const running = st && (st.state_name === 'RUNNING' || st.state_name === 'MAPPING');
+  const v = st ? Math.hypot(st.cmd.linear.x, st.cmd.linear.y) : null;
+  $('speed-val').textContent = v === null ? '—' : v.toFixed(2);
+  const vmax = S.vmax || 0.8;
+  $('speed-bar-fill').style.width = `${Math.min(100, (v || 0) / vmax * 100)}%`;
+  $('speed-bar-fill').style.background = speedColor((v || 0) / vmax);
+  const lim = running ? d.speed_limit : '';
+  const L = LIMITS[lim];
+  const tag = $('speed-limit');
+  tag.textContent = L ? `限速：${L[0]}` : '';
+  tag.style.display = L ? '' : 'none';
+  tag.style.borderColor = L ? L[1] : '';
+  tag.style.color = L ? L[1] : '';
+  const tgt = running && d.v_target !== undefined ? Math.min(1, d.v_target / vmax) : null;
+  $('speed-bar-target').style.display = tgt === null ? 'none' : '';
+  if (tgt !== null) $('speed-bar-target').style.left = `calc(${tgt * 100}% - 1px)`;
+  const a = S.actualV && now() - S.actualV.at < 1 ? S.actualV.v : null;
+  $('speed-actual').textContent = a === null ? '' : `${S.isSim ? '真實' : '里程計'} ${a.toFixed(2)} m/s`;
+  const sp = speedStats();
+  $('speed-stats').textContent = sp ? `平均 ${sp.mean.toFixed(2)} m/s · 最常限速：${(LIMITS[Object.entries(sp.share).sort((x, y) => y[1] - x[1])[0][0]] || ['—'])[0]}` : '';
+}
+
+// 0 = red, 0.5 = yellow, 1 = green
+function speedColor(f) {
+  f = Math.max(0, Math.min(1, f));
+  const c = f < 0.5 ? [[248, 81, 73], [242, 201, 76], f / 0.5] : [[242, 201, 76], [63, 185, 80], (f - 0.5) / 0.5];
+  const [a, b, t] = c;
+  return `rgb(${a.map((x, i) => Math.round(x + (b[i] - x) * t)).join(',')})`;
+}
+
+const chart = $('speed-chart');
+function drawSpeedChart() {
+  const r = chart.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  if (chart.width !== Math.round(r.width * dpr)) { chart.width = Math.round(r.width * dpr); chart.height = Math.round(r.height * dpr); }
+  const c = chart.getContext('2d'), W = chart.width, H = chart.height;
+  const strip = 8 * dpr, padL = 30 * dpr, padB = strip + 14 * dpr, padT = 6 * dpr;
+  c.clearRect(0, 0, W, H);
+  const h = S.speedHist;
+  const vmax = Math.max(S.vmax || 0.8, 0.1) * 1.1;
+  const tmax = Math.max(10, h.length ? h[h.length - 1].t : 0);
+  const X = (t) => padL + (W - padL - 4 * dpr) * t / tmax, Y = (v) => padT + (H - padB - padT) * (1 - v / vmax);
+  c.font = `${10 * dpr}px sans-serif`;
+  c.fillStyle = '#8b93a1';
+  c.strokeStyle = 'rgba(255,255,255,0.08)';
+  c.lineWidth = dpr;
+  for (let v = 0; v <= vmax; v += 0.2) {
+    c.beginPath(); c.moveTo(padL, Y(v)); c.lineTo(W, Y(v)); c.stroke();
+    c.fillText(v.toFixed(1), 2 * dpr, Y(v) + 3 * dpr);
+  }
+  for (let t = 0; t <= tmax; t += tmax > 30 ? 10 : 2) c.fillText(`${t}s`, X(t) - 6 * dpr, H - 2 * dpr);
+  // v_max
+  c.setLineDash([4 * dpr, 4 * dpr]);
+  c.strokeStyle = 'rgba(255,255,255,0.35)';
+  c.beginPath(); c.moveTo(padL, Y(S.vmax)); c.lineTo(W, Y(S.vmax)); c.stroke();
+  c.setLineDash([]);
+  if (!h.length) {
+    c.fillStyle = '#8b93a1';
+    c.fillText('開始之後會畫出這一輪的速度', padL + 10 * dpr, H / 2);
+    return;
+  }
+  // limiter strip
+  for (let i = 0; i < h.length; ++i) {
+    const L = LIMITS[h[i].limit];
+    if (!L) continue;
+    const x0 = X(h[i].t), x1 = i + 1 < h.length ? X(h[i + 1].t) : x0 + 2 * dpr;
+    c.fillStyle = L[1];
+    c.fillRect(x0, H - padB + 3 * dpr, Math.max(1, x1 - x0), strip);
+  }
+  const line = (key, color, width) => {
+    c.strokeStyle = color; c.lineWidth = width * dpr; c.beginPath();
+    let started = false;
+    for (const p of h) {
+      if (p[key] === null || p[key] === undefined) { started = false; continue; }
+      started ? c.lineTo(X(p.t), Y(p[key])) : c.moveTo(X(p.t), Y(p[key]));
+      started = true;
+    }
+    c.stroke();
+  };
+  line('target', 'rgba(255,255,255,0.25)', 1);
+  line('actual', 'rgba(255,255,255,0.85)', 1.5);
+  line('cmd', '#4c8dff', 2);
+}
+$('limit-legend').innerHTML = '<span><i style="background:#4c8dff"></i>指令</span><span><i style="background:rgba(255,255,255,.85)"></i>實際</span>' +
+  '<span><i style="background:rgba(255,255,255,.25)"></i>上限</span>' +
+  Object.values(LIMITS).map(([n, col]) => `<span><i style="background:${col}"></i>${n}</span>`).join('');
 
 // ------------------------------------------------------------------ commands
 const busy = {};
@@ -423,6 +551,12 @@ async function doStop() {
   await command('stop', S.status && S.status.state_name === 'IDLE');
 }
 $('btn-start').addEventListener('click', doStart);
+$('btn-reset').addEventListener('click', async () => {
+  if (await command('reset', true)) {
+    S.trail = []; S.truthTrail = []; S.speedHist = [];
+    toast('定位已重設到起點', '障礙物記憶已清除', 'ok');
+  }
+});
 $('btn-stop').addEventListener('click', doStop);
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
@@ -441,9 +575,10 @@ async function simReset(nextSeed) {
   try {
     if (S.status && S.status.state_name !== 'IDLE') await command('stop', true);
     const r = await call('/avoid_sim/reset', 'avoid_msgs/ResetField',
-      { seed, layout: $('sim-layout').value, start_error_xy: 0, start_error_yaw: 0 }, 20);
+      { seed, layout: $('sim-layout').value, start_error_xy: 0, start_error_yaw: 0, use_obstacles: [], use_start: [] }, 20);
     if (r.success) {
-      S.trail = []; S.truthTrail = [];
+      await command('reset', true);       // the robot is back on the start pose: re-anchor the localisation
+      S.trail = []; S.truthTrail = []; S.speedHist = [];
       $('sim-info').textContent = `seed ${r.seed}：${r.obstacles.length} 個障礙物，取樣 ${r.attempts} 次`;
       toast(`場地已重擺（seed ${r.seed}）`, r.message, 'ok');
     } else toast('重擺失敗', r.message, 'err');
@@ -452,6 +587,31 @@ async function simReset(nextSeed) {
   }
   for (const id of ['sim-reset', 'sim-next']) $(id).disabled = false;
 }
+async function saveCase() {
+  const expect = {};
+  if ($('case-result').value) expect.result = $('case-result').value;
+  const mt = parseFloat($('case-maxtime').value);
+  if (Number.isFinite(mt) && mt > 0) expect.max_time = mt;
+  const id = $('case-id').value.trim();
+  if (id && !/^[A-Za-z0-9_.-]+$/.test(id)) { toast('名稱只能用英數、- _ .', id, 'err'); return; }
+  const last = S.runs[0];
+  const sp = speedStats();
+  const observed = $('case-observed').value.trim() ||
+    (last ? `${last.text}${sp ? `；最常限速 ${(LIMITS[Object.entries(sp.share).sort((x, y) => y[1] - x[1])[0][0]] || ['—'])[0]}` : ''}` : '');
+  try {
+    const r = await call('/avoid_sim/save_case', 'avoid_msgs/SaveCase', {
+      file: $('case-file').value.trim(), id, sensor: S.sensor || 'camera', note: $('case-note').value,
+      observed, expect: Object.keys(expect).length ? JSON.stringify(expect) : '{}',
+      status: document.querySelector('input[name=case-status]:checked').value,
+    }, 6);
+    if (r.success) {
+      toast(`已記錄 case：${r.id}`, r.path, 'ok');
+      $('case-id').value = ''; $('case-note').value = ''; $('case-observed').value = '';
+      $('case-form').open = false;
+    } else toast('記錄失敗', r.message, 'err');
+  } catch (e) { toast('記錄失敗', e.message, 'err'); }
+}
+$('case-save').addEventListener('click', saveCase);
 $('sim-reset').addEventListener('click', () => simReset(false));
 $('sim-next').addEventListener('click', () => simReset(true));
 $('sim-random').addEventListener('click', () => { $('sim-seed').value = String(Math.floor(Math.random() * 100000)); });
@@ -677,7 +837,14 @@ function draw() {
   }
   if ($('show-trail').checked) {
     if (showTruth) line(S.truthTrail, 'rgba(255,255,255,0.45)', 1.5);
-    line(S.trail, 'rgba(76,141,255,0.9)', 1.5);
+    ctx.lineWidth = px(3);
+    ctx.lineCap = 'round';
+    for (let i = 1; i < S.trail.length; ++i) {
+      const [x0, y0] = S.trail[i - 1], [x1, y1, v] = S.trail[i];
+      ctx.strokeStyle = speedColor((v || 0) / (S.vmax || 0.8));
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
   }
   const st0 = S.status && S.status.state_name;
   if (st0 === 'RUNNING' || st0 === 'MAPPING') {        // nav_node only plans while running
@@ -714,7 +881,7 @@ let lastUi = 0;
 function frame() {
   draw();
   const t = now();
-  if (t - lastUi > 0.2) { renderStatus(); renderNodes(); renderDebug(); lastUi = t; }
+  if (t - lastUi > 0.1) { renderStatus(); renderNodes(); renderDebug(); drawSpeedChart(); lastUi = t; }
   requestAnimationFrame(frame);
 }
 resize();

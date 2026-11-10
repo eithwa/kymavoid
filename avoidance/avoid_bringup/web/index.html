@@ -23,7 +23,8 @@
     <div id="map-legend">
       <label><input type="checkbox" id="show-cspace"> C-space</label>
       <label><input type="checkbox" id="show-scan" checked> 即時掃描</label>
-      <label><input type="checkbox" id="show-trail" checked> 軌跡</label>
+      <label><input type="checkbox" id="show-trail" checked> 軌跡（顏色 = 速度）</label>
+      <span class="trail-legend"><i></i>慢 → 快</span>
       <label class="sim-only"><input type="checkbox" id="show-truth" checked> 真值（模擬）</label>
       <span id="cursor-pos"></span>
     </div>
@@ -36,6 +37,16 @@
         <span id="elapsed"></span>
       </div>
       <div id="state-reason">等待 rosbridge 連線</div>
+      <div id="speed-block">
+        <div class="speed-row">
+          <span id="speed-val">—</span><span class="speed-unit">m/s</span>
+          <span id="speed-limit" class="limit-tag" title="目前是哪一項限制了速度"></span>
+          <span id="speed-actual" class="muted"></span>
+        </div>
+        <div class="speed-bar" title="指令速度 / 最高速度">
+          <div id="speed-bar-fill"></div><div id="speed-bar-target" title="這一刻的速度上限"></div>
+        </div>
+      </div>
       <div id="pose-line"></div>
     </div>
 
@@ -43,7 +54,16 @@
       <button id="btn-start" class="btn start" disabled>開始</button>
       <button id="btn-stop" class="btn stop" title="任何時候都能按；空白鍵">停止<small>Space</small></button>
     </div>
-    <div id="start-hint"></div>
+    <div class="row hint-row">
+      <div id="start-hint"></div>
+      <button id="btn-reset" class="btn small" title="車子已經放回起點：定位歸位、清掉障礙物記憶（模擬重擺場地時會自動做）">重設定位</button>
+    </div>
+
+    <div class="card" id="speed-card">
+      <h3>速度（這一輪）<span class="muted" id="speed-stats"></span></h3>
+      <canvas id="speed-chart"></canvas>
+      <div id="limit-legend"></div>
+    </div>
 
     <nav id="tabs">
       <button data-tab="run" class="active">執行</button>
@@ -70,6 +90,30 @@
           <button id="sim-next" class="btn" title="seed + 1 後重擺">下一個 seed</button>
         </div>
         <div id="sim-info" class="muted"></div>
+        <details id="case-form">
+          <summary>記錄這個 case</summary>
+          <div class="muted">把目前的場地（障礙物位置、起點、seed）存進 <code>avoid_sim/cases/</code>，之後可以重跑、拿來當測試。</div>
+          <input type="text" id="case-id" placeholder="名稱（英數，可留空）">
+          <textarea id="case-note" rows="3" placeholder="哪裡有問題、要看什麼"></textarea>
+          <input type="text" id="case-observed" placeholder="實際發生的情況（預設：上一輪的結果）">
+          <div class="row">
+            <label>預期
+              <select id="case-result">
+                <option value="success">抵達終點</option>
+                <option value="">不檢查結果</option>
+              </select>
+            </label>
+            <label>最長 <input type="number" id="case-maxtime" step="0.5" min="0" placeholder="不限"> s</label>
+          </div>
+          <div class="row">
+            <label><input type="radio" name="case-status" value="open" checked> 問題（還沒修）</label>
+            <label><input type="radio" name="case-status" value="fixed"> 回歸測試（已修好）</label>
+          </div>
+          <div class="row">
+            <label>檔案 <input type="text" id="case-file" value="recorded.yaml"></label>
+            <button id="case-save" class="btn small">存檔</button>
+          </div>
+        </details>
       </div>
       <div class="card">
         <h3>節點</h3>
