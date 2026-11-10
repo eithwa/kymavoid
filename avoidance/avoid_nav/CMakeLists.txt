@@ -30,3 +30,8 @@ install(TARGETS avoid_nav_core LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINAT
 install(TARGETS camera_adapter lidar_adapter nav_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 install(DIRECTORY include/${PROJECT_NAME}/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
 install(DIRECTORY config launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_occupancy test/test_occupancy.cpp)
+  target_link_libraries(test_occupancy ${catkin_LIBRARIES})
+endif()

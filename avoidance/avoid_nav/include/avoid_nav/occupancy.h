@@ -1,5 +1,5 @@
 // Obstacle layer in the local (odometry) frame, costmap style: every scan marks the cells it hits
-// and clears the cells its beams pass through. Nothing expires with time: what is out of view
+// and clears the cells its beams pass through, as close to the hit as the reading's precision allows. Nothing expires with time: what is out of view
 // (behind obstacles, inside the camera's inner ring) keeps its last observed state, what is in
 // view is kept up to date. Ghosts left by odometry drift are cleared by the beams that see
 // through them.
@@ -20,10 +20,23 @@ struct OccParams
 {
   double res = 0.02;
   double x0 = -4.0, x1 = 4.5, y0 = -3.2, y1 = 3.2;   // local frame (starts on the field frame)
-  int hit = 3, miss = 1;          // a hit is stronger than a pass-through: grazing beams must not erase
+  // A hit is stronger than a pass-through: grazing beams must not erase. A precise hit marks an
+  // obstacle at once; a coarse one (far camera reading, several cm per pixel) needs a second.
+  int hit_precise = 3, hit_coarse = 1, miss = 1;
+  double coarse_sigma = 0.03;     // [m] readings with a larger range uncertainty are coarse
   int max_level = 8, min_level = -2;
-  int occupied_level = 2;         // >= this is an obstacle (one hit is enough)
-  double clear_margin = 0.10;     // stop clearing this short of the hit
+  int occupied_level = 2;         // >= this is an obstacle
+  // A beam clears cells up to clear_sigmas range uncertainties short of its hit (at least
+  // clear_margin). Near readings are precise, so they clear the noise far readings left in front
+  // of a surface; a fixed 10 cm kept every such ghost forever (obstacles grew 4-10 cm).
+  double clear_sigmas = 2.0;
+  double clear_margin = 0.02;
+  double clear_max = 0.10;        // never stop further short than this (far readings: no worse than before)
+  // A beam next to one that hits does not clear within corner_protect of that hit: protects the
+  // corners of real obstacles from grazing beams. (Limiting the whole beam to the neighbour's range
+  // instead left the noise next to every corner, "tails" that closed passable 50 cm gaps.)
+  double corner_protect = 0.03;
+  double sigma_const = 0.02;      // [m] range uncertainty when no table is set (lidar)
 };
 
 class OccGrid
@@ -37,6 +50,16 @@ public:
   }
 
   void clear() { std::fill(v_.begin(), v_.end(), 0); }
+
+  // Range uncertainty [m] per centimetre of range (index = range in cm); empty = sigma_const.
+  void setSigmaTable(const std::vector<float>& sigma_by_cm) { sigma_cm_ = sigma_by_cm; }
+  double sigma(double range) const
+  {
+    if (sigma_cm_.empty() || !std::isfinite(range))
+      return p_.sigma_const;
+    const size_t i = std::min(sigma_cm_.size() - 1, static_cast<size_t>(std::max(0.0, range * 100.0)));
+    return sigma_cm_[i];
+  }
 
   // Sensor at (sx, sy, sth) in the local frame when the scan was taken. Beams that are NaN (unknown)
   // or flagged (intensity > 0.5: camera inner ring, true range unknown) change nothing.
@@ -58,27 +81,48 @@ public:
       double r;
       if (!usable(k, r))
         continue;
-      // clear only where this beam and both neighbours see through: corners of an obstacle sit next
-      // to beams that just miss them
-      double reach = r;
+      // neighbours: unknown (NaN, camera inner ring) -> clear nothing beside them; a hit protects the
+      // cells around it (an obstacle corner between the two beams)
+      double reach = std::min(r, max_range);
+      double px[2], py[2];
+      int np = 0;
       for (int dk : {-1, 1})
       {
+        const int j = (k + dk + n) % n;
         double rn;
-        reach = usable((k + dk + n) % n, rn) ? std::min(reach, rn) : 0.0;
+        if (!usable(j, rn))
+          reach = 0.0;
+        else if (std::isfinite(rn))
+        {
+          const double aj = sth + m.angle_min + j * m.angle_increment;
+          px[np] = sx + std::cos(aj) * rn;
+          py[np] = sy + std::sin(aj) * rn;
+          ++np;
+        }
       }
-      reach = std::min(reach, max_range) - p_.clear_margin;
+      if (reach > 0)
+        reach -= std::min(p_.clear_max, std::max(p_.clear_margin, p_.clear_sigmas * sigma(reach)));
       const double a = sth + m.angle_min + k * m.angle_increment;
       const double ca = std::cos(a), sa = std::sin(a);
+      const double prot2 = p_.corner_protect * p_.corner_protect;
       long last = -1;                                   // each cell once per beam
       for (double d = 0.5 * p_.res; d < reach; d += 0.5 * p_.res)
       {
-        const long cell = static_cast<long>(row(sy + sa * d)) * nx_ + col(sx + ca * d);
-        if (cell != last)
-          add(sx + ca * d, sy + sa * d, -p_.miss);
+        const double cx = sx + ca * d, cy = sy + sa * d;
+        const long cell = static_cast<long>(row(cy)) * nx_ + col(cx);
+        if (cell == last)
+          continue;
         last = cell;
+        // centre of this cell, compared with the neighbours' hits
+        const double ccx = p_.x0 + (col(cx) + 0.5) * p_.res, ccy = p_.y0 + (row(cy) + 0.5) * p_.res;
+        bool prot = false;
+        for (int q = 0; q < np && !prot; ++q)
+          prot = (ccx - px[q]) * (ccx - px[q]) + (ccy - py[q]) * (ccy - py[q]) < prot2;
+        if (!prot)
+          add(cx, cy, -p_.miss);
       }
       if (std::isfinite(r))
-        add(sx + ca * r, sy + sa * r, p_.hit);
+        add(sx + ca * r, sy + sa * r, sigma(r) <= p_.coarse_sigma ? p_.hit_precise : p_.hit_coarse);
     }
   }
 
@@ -125,5 +169,6 @@ private:
   OccParams p_;
   int nx_, ny_;
   std::vector<int8_t> v_;
+  std::vector<float> sigma_cm_;
 };
 }  // namespace avoid_nav

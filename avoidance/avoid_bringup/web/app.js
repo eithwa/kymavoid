@@ -39,7 +39,8 @@ const TUNABLES = [
     ['max_obstacle_range', '障礙物最遠距離', 'm', 0.1],
     ['red_line_max_range', '紅線修正最遠', 'm', 0.1],
     ['wall_max_range', '矮牆修正最遠', 'm', 0.1],
-    ['clear_margin', '清除餘量', 'm', 0.01],
+    ['clear_margin', '清除餘量（最小）', 'm', 0.01],
+    ['clear_sigmas', '清除餘量 × 讀值誤差', 'σ', 0.5],
   ]],
 ];
 
@@ -282,6 +283,7 @@ function onTruth(m) {
 
 function onCspace(m) {
   const w = m.info.width, h = m.info.height, d = m.data;
+  if (!w || !h) { S.cspace = null; return; }         // nav_node was reset
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
@@ -418,6 +420,12 @@ function renderStatus() {
 }
 
 // ------------------------------------------------------------------ speed
+// nav_node was reset: drop everything that belonged to the previous field / run
+function clearRunDisplay() {
+  S.trail = []; S.truthTrail = []; S.speedHist = [];
+  S.obstacles = []; S.path = []; S.cspace = null; S.scan = null; S.boundary = null;
+}
+
 function speedStats() {
   const h = S.speedHist.filter((p) => p.cmd !== undefined);
   if (h.length < 2) return null;
@@ -553,7 +561,7 @@ async function doStop() {
 $('btn-start').addEventListener('click', doStart);
 $('btn-reset').addEventListener('click', async () => {
   if (await command('reset', true)) {
-    S.trail = []; S.truthTrail = []; S.speedHist = [];
+    clearRunDisplay();
     toast('定位已重設到起點', '障礙物記憶已清除', 'ok');
   }
 });
@@ -577,8 +585,8 @@ async function simReset(nextSeed) {
     const r = await call('/avoid_sim/reset', 'avoid_msgs/ResetField',
       { seed, layout: $('sim-layout').value, start_error_xy: 0, start_error_yaw: 0, use_obstacles: [], use_start: [] }, 20);
     if (r.success) {
-      await command('reset', true);       // the robot is back on the start pose: re-anchor the localisation
-      S.trail = []; S.truthTrail = []; S.speedHist = [];
+      await command('reset', true);       // robot back on the start pose: re-anchor, forget the old obstacle map
+      clearRunDisplay();
       $('sim-info').textContent = `seed ${r.seed}：${r.obstacles.length} 個障礙物，取樣 ${r.attempts} 次`;
       toast(`場地已重擺（seed ${r.seed}）`, r.message, 'ok');
     } else toast('重擺失敗', r.message, 'err');

@@ -15,4 +15,5 @@
   <depend>tf2_ros</depend>
   <exec_depend>robot6th_description</exec_depend>
   <exec_depend>rospy</exec_depend>
+  <test_depend>rosunit</test_depend>
 </package>

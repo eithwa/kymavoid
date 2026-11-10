@@ -41,6 +41,7 @@
 #include <deque>
 #include <vector>
 
+#include "avoid_nav/camera_model.h"
 #include "avoid_nav/localizer.h"
 #include "avoid_nav/occupancy.h"
 #include "avoid_nav/planner.h"
@@ -98,6 +99,18 @@ public:
     odom_ = {"odom", t_odom, true, ros::Time()};
     imu_ = {"imu", t_imu, true, ros::Time()};
     boundary_ = {"boundary", t_bound, false, ros::Time()};
+    // range uncertainty of the obstacle readings, for clearing the grid: the camera's falls with range
+    if (sensor_ == "camera")
+    {
+      double cam_high, sigma_px;
+      int inner, outer;
+      loadCameraModel(nh, cam_high, inner, outer);
+      pnh.param("camera_sigma_px", sigma_px, 1.0);   // pixel noise + quantisation of black_item
+      for (int cm = 0; cm <= 800; ++cm)
+        sigma_table_.push_back(static_cast<float>(omniRangeSigma(std::max(cm, 1) / 100.0, cam_high, outer, sigma_px)));
+      ROS_INFO("nav_node: camera range sigma %.3f m at 0.5 m, %.3f m at 1 m, %.3f m at 2 m", sigma_table_[50],
+               sigma_table_[100], sigma_table_[200]);
+    }
     // control and perception tuning: re-read at every start, editable from the web UI
     pnh.param("tuning_file", tuning_file_, std::string());
     loadTuning();
@@ -204,7 +217,8 @@ private:
         {"wall_max_range", &NavNode::wall_max_range_, 2.5},
         {"line_margin_base", &NavNode::line_margin_base_, 0.02},
         {"line_margin_sigma", &NavNode::line_margin_sigma_, 2.0},
-        {"clear_margin", &NavNode::clear_margin_, 0.10},
+        {"clear_margin", &NavNode::clear_margin_, 0.02},    // beams clear up to max(this, clear_sigmas x sigma) short of a hit
+        {"clear_sigmas", &NavNode::clear_sigmas_, 2.0},
         {"recovery_after", &NavNode::recovery_after_, 1.0},
         {"no_path_timeout", &NavNode::no_path_timeout_, 3.0},
     };
@@ -217,7 +231,9 @@ private:
       pnh_.param(t.name, this->*t.field, t.def >= 0 ? t.def : (sensor_ == "camera" ? 2.5 : 6.0));
     OccParams op;
     op.clear_margin = clear_margin_;
+    op.clear_sigmas = clear_sigmas_;
     grid_ = OccGrid(op);
+    grid_.setSigmaTable(sigma_table_);
   }
 
   // Write the current parameter-server values (what the next start will use) back to the tuning
@@ -463,6 +479,7 @@ private:
       // the robot was put back on the start pose (or the simulator teleported it there)
       anchorAtStart();
       setState(IDLE, "reset: pose set to the start");
+      publishCleared(now);
     }
     else if (req.command == "save")
     {
@@ -491,6 +508,7 @@ private:
     history_.clear();
     path_.clear();
     path_ok_ = false;
+    occupied_cells_ = 0;                            // /avoid/debug must not keep showing the old map
     ++run_id_;                                      // plans computed before this are dropped
     cmd_ = geometry_msgs::Twist();
     lines_accepted_ = lines_rejected_ = walls_accepted_ = walls_rejected_ = 0;
@@ -560,6 +578,22 @@ private:
       publishPath(now);
       publishMaps(now, obs, *pl);
     }
+  }
+
+  // After a reset: the obstacle memory, path and C-space are gone, say so to every viewer (in IDLE
+  // nothing else would be published and the old map would stay on screen).
+  void publishCleared(const ros::Time& now)
+  {
+    path_.clear();
+    publishPath(now);
+    sensor_msgs::PointCloud pc;
+    pc.header.stamp = now;
+    pc.header.frame_id = "field";
+    obstacles_pub_.publish(pc);
+    nav_msgs::OccupancyGrid g;
+    g.header = pc.header;
+    g.info.origin.orientation.w = 1;
+    cspace_pub_.publish(g);
   }
 
   void publishPath(const ros::Time& now)
@@ -934,7 +968,8 @@ private:
   double rate_ = 20, plan_rate_ = 10, mapping_duration_ = 1, max_imu_step_ = 0.3;
   double v_max_, a_max_, a_brake_, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
   double safety_margin_, max_obs_range_, line_margin_base_, line_margin_sigma_, no_path_timeout_;
-  double clear_margin_ = 0.10, recovery_after_ = 1.0;
+  double clear_margin_ = 0.02, clear_sigmas_ = 2.0, recovery_after_ = 1.0;
+  std::vector<float> sigma_table_;                 // range uncertainty per cm of range (camera), empty = lidar
   size_t occupied_cells_ = 0;
   bool recovered_ = false;
   // state

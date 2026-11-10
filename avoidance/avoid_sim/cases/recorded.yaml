@@ -55,10 +55,11 @@ cases:
   - [-0.6248, 0.2721]
   - [1.3785, 1.107]
   - [0.0298, -0.6906]
-  note: 左邊紅線旁的死路：先往左上走進死路再退出來，有時候逾時。屬於路線選擇問題（加分項目：起跑前的路線提示）
-  observed: timeout 40 s / success 22.8-24.6 s（同一場地每次不同）
-  expect: {result: success, max_time: 30.0}
-  status: open
+  note: 往左上走進紅線旁的死路、卡在 (-0.13, 0.60) 不動（安全層擋住，規劃器卻說有路）。根因：障礙物記憶裡的假點。固定「清到打到點前 10 cm」讓遠處雜訊讀值永遠清不掉，「左右射線都穿過才清」讓角落外的尾巴清不掉；55
+    cm 的斜縫在 C-space 只剩 4 cm（真實約 11 cm），規劃器不走。改成依讀值精度清除 + 只保護角落 3 cm 後保留 10-12 cm，直接穿過。
+  observed: 修正前 timeout 40 s（兩次）；修正後 7.8 / 9.4 s 與 3 次重跑都通過（2026-11-10）
+  expect: {result: success, max_time: 12.0}
+  status: fixed
 - id: slow-detour-seed6
   recorded: 2026-11-10 10:50
   sensor: camera
@@ -74,7 +75,27 @@ cases:
   - [-0.7499, 0.8241]
   - [2.4382, 0.1645]
   - [-0.1526, -0.6273]
-  note: 路線選擇不穩定：同一個場地有時繞遠路或進死路再退出，時間差將近 3 倍
-  observed: success 10.5 s（v_per_clearance 3）/ 17.6 s / 28.7 s（v_per_clearance 8）
+  note: 路線換來換去、繞遠路。根因同 dead-end-left-seed4：假點把可以過的窄縫封住（前 5 秒假性封縫 31% -> 7-11%）。
+  observed: 修正前 10.5 / 17.6 / 28.7 / 29.5 / 23.6 s；修正後 7.1-11.0 s，3 次重跑都通過（2026-11-10）
   expect: {result: success, max_time: 12.0}
+  status: fixed
+- id: lidar-dead-end-seed4
+  recorded: 2026-11-10 12:04
+  sensor: lidar
+  seed: 4
+  layout: random
+  start: [-2.0, 0.0, 0.0]
+  obstacles:
+  - [2.2836, 0.0283]
+  - [2.4097, -1.0479]
+  - [1.008, -0.3088]
+  - [0.3359, 0.7224]
+  - [2.3819, 1.0726]
+  - [-0.6248, 0.2721]
+  - [1.3785, 1.107]
+  - [0.0298, -0.6906]
+  note: 雷射設定在 seed 4 很慢或逾時，攝影機設定已修好（dead-end-left-seed4）。雷射沒有絕對 y 修正（還沒做 ICP），這輪 y 誤差到 25 cm，紅線禁止區隨 sigma 變寬，死路就在左邊紅線旁：可能是定位問題，也可能和清除規則有關，未確認。做第
+    6 階段 ICP 時重看。
+  observed: timeout 40 s（2026-11-10，依精度清除之後）；之前 success 21.3 s
+  expect: {result: success, max_time: 25.0}
   status: open
