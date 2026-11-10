@@ -28,8 +28,13 @@
 #include <std_msgs/String.h>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -120,7 +125,8 @@ public:
     loc_ = Localizer(lp);
     loc_.reset(start_.x, start_.y, start_.th);
     footprint_ = loadPolygon(nh, "/robot/footprint");
-    planner_.setFootprint(footprint_);
+    planner_template_.setFootprint(footprint_);
+    planner_ = std::make_shared<GridPlanner>(planner_template_);
 
     cmd_pub_ = nh.advertise<geometry_msgs::Twist>("cmd_vel", 5);
     status_pub_ = nh.advertise<avoid_msgs::Status>("avoid/status", 5, true);
@@ -137,6 +143,18 @@ public:
     timer_ = nh.createTimer(ros::Duration(1.0 / rate_), &NavNode::tick, this);
     reason_ = "ready";
     ROS_INFO("nav_node: sensor %s, v_max %.2f m/s, footprint %zu points", sensor_.c_str(), v_max_, footprint_.size());
+    plan_thread_ = std::thread(&NavNode::planLoop, this);
+  }
+
+  ~NavNode()
+  {
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      stop_thread_ = true;
+    }
+    plan_cv_.notify_all();
+    if (plan_thread_.joinable())
+      plan_thread_.join();
   }
 
 private:
@@ -176,7 +194,7 @@ private:
         {"a_brake", &NavNode::a_brake_, 1.2},
         {"stop_margin", &NavNode::stop_margin_, 0.03},
         {"v_tight", &NavNode::v_tight_, 0.15},             // speed with zero clearance
-        {"v_per_clearance", &NavNode::v_per_clear_, 3.0},  // + this x clearance [m/s per m]
+        {"v_per_clearance", &NavNode::v_per_clear_, 8.0},  // + this x clearance [m/s per m]
         {"lookahead", &NavNode::lookahead_, 0.35},
         {"k_heading", &NavNode::k_heading_, 1.5},
         {"w_max", &NavNode::w_max_, 1.0},
@@ -263,6 +281,7 @@ private:
   // ---------------------------------------------------------------- inputs
   void onImu(const std_msgs::Float64& m)
   {
+    std::lock_guard<std::mutex> lock(mtx_);
     imu_.last = ros::Time::now();
     imu_yaw_ = m.data;
     have_imu_ = true;
@@ -270,6 +289,7 @@ private:
 
   void onOdom(const nav_msgs::Odometry& m)
   {
+    std::lock_guard<std::mutex> lock(mtx_);
     const ros::Time now = ros::Time::now();
     odom_.last = now;
     const auto& q = m.pose.pose.orientation;
@@ -311,6 +331,7 @@ private:
 
   void onScan(const sensor_msgs::LaserScan& m)
   {
+    std::lock_guard<std::mutex> lock(mtx_);
     const ros::Time now = ros::Time::now();
     obstacles_.last = now;
     if (!active())
@@ -365,6 +386,7 @@ private:
 
   void onBoundary(const sensor_msgs::LaserScan& m)
   {
+    std::lock_guard<std::mutex> lock(mtx_);
     boundary_.last = ros::Time::now();
     if (!active() || sensor_ != "camera")
       return;
@@ -408,6 +430,7 @@ private:
 
   bool onCommand(avoid_msgs::Command::Request& req, avoid_msgs::Command::Response& res)
   {
+    std::lock_guard<std::mutex> lock(mtx_);
     const ros::Time now = ros::Time::now();
     if (req.command == "start")
     {
@@ -425,23 +448,22 @@ private:
         return true;
       }
       loadTuning();                                   // picks up parameters changed from the web UI
-      // the robot stands on the start pose: (re)anchor everything there
-      loc_.reset(start_.x, start_.y, start_.th);
-      local_ = start_;
-      imu0_ = imu_yaw_;
-      grid_.clear();
-      history_.clear();
-      path_.clear();
-      cmd_ = geometry_msgs::Twist();
-      lines_accepted_ = lines_rejected_ = walls_accepted_ = walls_rejected_ = 0;
+      anchorAtStart();
+      max_plan_ms_ = 0;
       start_time_ = now;
+      plan_now_ = true;                               // first plan right away
+      plan_cv_.notify_one();
       last_path_ok_ = now;
       setState(sensor_ == "lidar" ? MAPPING : RUNNING, "started");
     }
     else if (req.command == "stop")
       setState(IDLE, "stopped by command");
     else if (req.command == "reset")
-      setState(IDLE, "reset");
+    {
+      // the robot was put back on the start pose (or the simulator teleported it there)
+      anchorAtStart();
+      setState(IDLE, "reset: pose set to the start");
+    }
     else if (req.command == "save")
     {
       res.success = saveTuning(res.message);
@@ -459,36 +481,89 @@ private:
     return true;
   }
 
+  // The robot stands on the start pose: (re)anchor localisation and forget the obstacle memory.
+  void anchorAtStart()
+  {
+    loc_.reset(start_.x, start_.y, start_.th);
+    local_ = start_;
+    imu0_ = imu_yaw_;
+    grid_.clear();
+    history_.clear();
+    path_.clear();
+    path_ok_ = false;
+    ++run_id_;                                      // plans computed before this are dropped
+    cmd_ = geometry_msgs::Twist();
+    lines_accepted_ = lines_rejected_ = walls_accepted_ = walls_rejected_ = 0;
+  }
+
   // ---------------------------------------------------------------- cycle
   Pose2 fieldPose() const { return {loc_.x(), loc_.y(), loc_.theta()}; }
 
-  void replan(const ros::Time& now)
+  // Planning runs in its own thread: building the C-space and A* take 20-100+ ms, which used to
+  // block odometry, localisation and control in the single ROS thread (status gaps up to 0.46 s).
+  // Snapshot under the lock, plan without it, swap the result in under the lock.
+  void planLoop()
   {
-    const Pose2 F = fieldPose();
-    const Pose2 T = compose(F, inverse(local_));               // local -> field
-    const Pose2 base_from_local = inverse(local_);
-    std::vector<Pt> obs;
-    const std::vector<Pt> cells = grid_.occupied();
-    occupied_cells_ = cells.size();
-    obs.reserve(cells.size());
-    for (const Pt& c : cells)
+    std::unique_lock<std::mutex> lk(mtx_);
+    while (!stop_thread_ && ros::ok())
     {
-      // an occupied cell inside the robot's own footprint is stale (odometry drift): an obstacle
-      // cannot be inside the robot
-      if (inside(footprint_, apply(base_from_local, c)))
+      plan_cv_.wait_for(lk, std::chrono::milliseconds(static_cast<int>(1000.0 / plan_rate_)),
+                        [this] { return stop_thread_ || plan_now_; });
+      if (stop_thread_)
+        break;
+      plan_now_ = false;
+      if (!active())
         continue;
-      obs.push_back(apply(T, c));
+      const unsigned run = run_id_;
+      const Pose2 F = fieldPose();
+      const Pose2 T = compose(F, inverse(local_));             // local -> field
+      const Pose2 base_from_local = inverse(local_);
+      const std::vector<Pt> cells = grid_.occupied();
+      Keepout k = keep_;
+      k.line_margin = line_margin_base_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(1, 1)));
+      lk.unlock();
+
+      std::vector<Pt> obs;
+      obs.reserve(cells.size());
+      for (const Pt& c : cells)
+      {
+        // an occupied cell inside the robot's own footprint is stale (odometry drift): an obstacle
+        // cannot be inside the robot
+        if (inside(footprint_, apply(base_from_local, c)))
+          continue;
+        obs.push_back(apply(T, c));
+      }
+      auto pl = std::make_shared<GridPlanner>(planner_template_);
+      std::vector<Pt> path;
+      const ros::WallTime w0 = ros::WallTime::now();
+      pl->build(obs, F.th, k);
+      const ros::WallTime w1 = ros::WallTime::now();
+      const bool ok = pl->plan(F.x, F.y, path);
+      const ros::WallTime w2 = ros::WallTime::now();
+      const ros::Time now = ros::Time::now();
+
+      lk.lock();
+      if (stop_thread_ || run != run_id_ || !active())
+        continue;                                            // restarted or stopped meanwhile: drop it
+      planner_ = pl;
+      path_ = path;
+      path_ok_ = ok;
+      occupied_cells_ = cells.size();
+      build_ms_ = (w1 - w0).toSec() * 1e3;
+      plan_ms_ = (w2 - w1).toSec() * 1e3;
+      max_plan_ms_ = std::max(max_plan_ms_, build_ms_ + plan_ms_);
+      if (path_ok_)
+      {
+        last_path_ok_ = now;
+        recovered_ = false;
+      }
+      publishPath(now);
+      publishMaps(now, obs, *pl);
     }
-    Keepout k = keep_;
-    k.line_margin = line_margin_base_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(1, 1)));
-    planner_.build(obs, F.th, k);
-    path_ok_ = planner_.plan(F.x, F.y, path_);
-    publishMaps(now, obs);
-    if (path_ok_)
-    {
-      last_path_ok_ = now;
-      recovered_ = false;
-    }
+  }
+
+  void publishPath(const ros::Time& now)
+  {
     nav_msgs::Path p;
     p.header.stamp = now;
     p.header.frame_id = "field";
@@ -549,7 +624,7 @@ private:
       const double d = std::hypot(p.x - F.x, p.y - F.y);
       if (d < 1e-6)
         continue;
-      if (planner_.freeDistance(F.x, F.y, (p.x - F.x) / d, (p.y - F.y) / d, d) < d - 0.01)
+      if (planner_->freeDistance(F.x, F.y, (p.x - F.x) / d, (p.y - F.y) / d, d) < d - 0.01)
         break;
       best = p;
     }
@@ -595,6 +670,9 @@ private:
     const double c = std::cos(F.th), s = std::sin(F.th);
     const double cur_fx = c * cmd_.linear.x - s * cmd_.linear.y, cur_fy = s * cmd_.linear.x + c * cmd_.linear.y;
     double des_fx = 0, des_fy = 0;
+    speed_ = SpeedInfo();
+    speed_.v_max = v_max_;
+    speed_.limit = "no_path";                       // braking unless a target is found below
     if (path_ok_ && path_.size() >= 2)
     {
       const Pt t = visibleTarget(F);
@@ -604,16 +682,27 @@ private:
       {
         ux /= n;
         uy /= n;
-        double v = v_max_;
-        const double dfree = planner_.freeDistance(F.x, F.y, ux, uy, 3.0);
-        v = std::min(v, std::sqrt(2 * a_brake_ * std::max(0.0, dfree - stop_margin_)));
-        v = std::min(v, v_tight_ + v_per_clear_ * planner_.clearance(F.x, F.y));
+        const double dfree = planner_->freeDistance(F.x, F.y, ux, uy, 3.0);
+        speed_.v_dfree = std::sqrt(2 * a_brake_ * std::max(0.0, dfree - stop_margin_));
+        speed_.v_clear = v_tight_ + v_per_clear_ * planner_->clearance(F.x, F.y);
         const double cur = std::hypot(cur_fx, cur_fy);
         if (cur > 0.05)
         {
           const double turn = std::acos(std::max(-1.0, std::min(1.0, (cur_fx * ux + cur_fy * uy) / cur)));
-          v = std::min(v, std::max(0.15, v_max_ * std::cos(std::min(turn, M_PI / 2))));
+          speed_.v_turn = std::max(0.15, v_max_ * std::cos(std::min(turn, M_PI / 2)));
         }
+        double v = speed_.v_max;
+        speed_.limit = "v_max";
+        for (const auto& l : {std::make_pair(speed_.v_dfree, "dfree"), std::make_pair(speed_.v_clear, "clearance"),
+                              std::make_pair(speed_.v_turn, "turn")})
+          if (l.first < v)
+          {
+            v = l.first;
+            speed_.limit = l.second;
+          }
+        if (v > v_max_ - 0.01)
+          speed_.limit = "v_max";                   // e.g. the turn limit is 0.8 cos(0.5 deg): not limiting
+        speed_.v_target = v;
         des_fx = v * ux;
         des_fy = v * uy;
         last_vlimit_ = v;
@@ -629,6 +718,8 @@ private:
       dx *= amax / dv;
       dy *= amax / dv;
     }
+    if (dv > amax && std::hypot(des_fx, des_fy) > std::hypot(cur_fx, cur_fy) + 1e-3)
+      speed_.limit = "accel";                       // still accelerating towards the target speed
     double fx = cur_fx + dx, fy = cur_fy + dy;
     // base frame
     double bx = c * fx + s * fy, by = -s * fx + c * fy;
@@ -637,17 +728,20 @@ private:
     if (v > 1e-3)
     {
       const double vs = safetySpeedLimit(bx / v, by / v, v);
+      speed_.v_safety = vs;
       if (vs < v)
       {
         bx *= vs / v;
         by *= vs / v;
         safety_active_ = true;
+        speed_.limit = "safety";
       }
       else
         safety_active_ = false;
     }
     out.linear.x = bx;
     out.linear.y = by;
+    speed_.v_cmd = std::hypot(bx, by);
     out.angular.z = std::max(-w_max_, std::min(w_max_, -k_heading_ * wrapAngle(F.th - start_.th)));
     return out;
   }
@@ -668,6 +762,7 @@ private:
 
   void tick(const ros::TimerEvent&)
   {
+    std::lock_guard<std::mutex> lock(mtx_);
     const ros::Time now = ros::Time::now();
     const double dt = 1.0 / rate_;
 
@@ -680,17 +775,12 @@ private:
     }
     if (active())
     {
-      if ((now - last_plan_).toSec() >= 1.0 / plan_rate_)
-      {
-        replan(now);
-        last_plan_ = now;
-      }
       const Pose2 F = fieldPose();
       if (state_ == MAPPING && (now - start_time_).toSec() >= mapping_duration_)
         setState(RUNNING, "start map done");
       if (state_ == RUNNING)
       {
-        if (F.x + planner_.frontExtent() >= keep_.goal_x)
+        if (F.x + planner_->frontExtent() >= keep_.goal_x)
         {
           finish_time_ = (now - start_time_).toSec();
           std::ostringstream os;
@@ -719,6 +809,11 @@ private:
         cmd = brake(dt);
     }
     cmd_ = cmd;
+    if (state_ != RUNNING)
+    {
+      speed_ = SpeedInfo();
+      speed_.v_cmd = std::hypot(cmd.linear.x, cmd.linear.y);
+    }
     cmd_pub_.publish(cmd);
     publishPose(now);
     if (++tick_count_ % std::max(1, static_cast<int>(rate_ / 10.0)) == 0)
@@ -758,7 +853,7 @@ private:
   }
 
   // obstacle points and C-space in the field frame, for debugging and the web UI (2 Hz)
-  void publishMaps(const ros::Time& now, const std::vector<Pt>& obs)
+  void publishMaps(const ros::Time& now, const std::vector<Pt>& obs, const GridPlanner& planner)
   {
     if ((now - last_maps_).toSec() < 0.5)
       return;
@@ -774,14 +869,14 @@ private:
       pc.points.push_back(p);
     }
     obstacles_pub_.publish(pc);
-    const cv::Mat& c = planner_.cspace();
+    const cv::Mat& c = planner.cspace();
     nav_msgs::OccupancyGrid g;
     g.header = pc.header;
-    g.info.resolution = planner_.params().res;
+    g.info.resolution = planner.params().res;
     g.info.width = c.cols;
     g.info.height = c.rows;
-    g.info.origin.position.x = planner_.params().x_min;
-    g.info.origin.position.y = planner_.params().y_min;
+    g.info.origin.position.x = planner.params().x_min;
+    g.info.origin.position.y = planner.params().y_min;
     g.info.origin.orientation.w = 1;
     g.data.resize(c.rows * c.cols);
     for (int r = 0; r < c.rows; ++r)
@@ -823,7 +918,11 @@ private:
        << ", \"safety\": " << (safety_active_ ? "true" : "false") << ", \"lines_accepted\": " << lines_accepted_
        << ", \"lines_rejected\": " << lines_rejected_ << ", \"walls_accepted\": " << walls_accepted_
        << ", \"walls_rejected\": " << walls_rejected_ << ", \"scale_x\": " << loc_.scaleX()
-       << ", \"scale_y\": " << loc_.scaleY() << "}";
+       << ", \"scale_y\": " << loc_.scaleY() << ", \"speed_limit\": \"" << (active() ? speed_.limit : "") << "\""
+       << ", \"v_cmd\": " << speed_.v_cmd << ", \"v_target\": " << speed_.v_target << ", \"v_max\": " << speed_.v_max
+       << ", \"v_dfree\": " << speed_.v_dfree << ", \"v_clearance\": " << speed_.v_clear << ", \"v_turn\": " << speed_.v_turn
+       << ", \"v_safety\": " << speed_.v_safety << ", \"build_ms\": " << build_ms_ << ", \"plan_ms\": " << plan_ms_
+       << ", \"max_plan_ms\": " << max_plan_ms_ << "}";
     std_msgs::String m;
     m.data = os.str();
     debug_pub_.publish(m);
@@ -840,7 +939,7 @@ private:
   bool recovered_ = false;
   // state
   uint8_t state_ = IDLE;
-  ros::Time start_time_, last_plan_, last_path_ok_, last_odom_;
+  ros::Time start_time_, last_path_ok_, last_odom_;
   double finish_time_ = 0;
   unsigned long tick_count_ = 0;
   Input obstacles_, odom_, imu_, boundary_;
@@ -848,7 +947,13 @@ private:
   double imu_yaw_ = 0, imu0_ = 0, imu_at_last_odom_ = 0;
   Pose2 start_, local_, odom_pose_;
   Localizer loc_;
-  GridPlanner planner_;
+  GridPlanner planner_template_;                   // footprint set, nothing built
+  std::shared_ptr<const GridPlanner> planner_;     // latest built planner (swapped by planLoop)
+  std::mutex mtx_;                                 // all state below/above: callbacks vs planLoop
+  std::condition_variable plan_cv_;
+  std::thread plan_thread_;
+  bool stop_thread_ = false, plan_now_ = false;
+  unsigned run_id_ = 0;
   Keepout keep_;
   Polygon footprint_;
   OccGrid grid_;                                    // obstacle layer, local frame
@@ -856,6 +961,13 @@ private:
   std::vector<Pt> path_;
   bool path_ok_ = false, safety_active_ = false;
   double last_vlimit_ = 0, last_dfree_ = 0;
+  double build_ms_ = 0, plan_ms_ = 0, max_plan_ms_ = 0;     // wall time of the last replan / worst this run
+  // speed limits of the last control cycle (m/s; 99 = not limiting) and which one decided
+  struct SpeedInfo
+  {
+    double v_max = 0, v_dfree = 99, v_clear = 99, v_turn = 99, v_safety = 99, v_target = 0, v_cmd = 0;
+    std::string limit;
+  } speed_;
   int lines_accepted_ = 0, lines_rejected_ = 0, walls_accepted_ = 0, walls_rejected_ = 0;
   std::vector<FieldLine> red_lines_, walls_;
   double red_max_range_ = 1.5, wall_max_range_ = 2.5;

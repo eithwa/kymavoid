@@ -57,7 +57,7 @@ public:
 
 private:
   bool cell(double x, double y, int& r, int& c) const;
-  bool lineOfSight(int r0, int c0, int r1, int c1) const;
+  bool lineOfSight(int r0, int c0, int r1, int c1, float need) const;
 
   PlannerParams p_;
   Polygon fp_;

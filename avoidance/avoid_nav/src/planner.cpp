@@ -106,11 +106,9 @@ double GridPlanner::freeDistance(double x, double y, double ux, double uy, doubl
   return max_d;
 }
 
-bool GridPlanner::lineOfSight(int r0, int c0, int r1, int c1) const
+// Straight segment through free C-space keeping at least `need` metres from its boundary.
+bool GridPlanner::lineOfSight(int r0, int c0, int r1, int c1, float need) const
 {
-  // a shortcut must keep half the preferred clearance, so smoothing does not undo A*'s spacing;
-  // in gaps tighter than that the A* cells are kept as they are
-  const float need = static_cast<float>(std::max(p_.res * 1.5, 0.5 * p_.clearance_pref));
   const int n = std::max(std::abs(r1 - r0), std::abs(c1 - c0));
   for (int i = 0; i <= n; ++i)
   {
@@ -197,13 +195,25 @@ bool GridPlanner::plan(double x, double y, std::vector<Pt>& path) const
   for (int v = goal; v >= 0; v = parent[v])
     cells.push_back(v);
   std::reverse(cells.begin(), cells.end());
-  // shortcut smoothing: keep a waypoint only where the straight line to the next would be blocked
+  // Shortcut smoothing: keep a waypoint only where the straight line to a later one would be
+  // blocked. A shortcut must keep the clearance the A* cells it replaces had (up to clearance_pref):
+  // otherwise it pulls a path that A* centred in a wide gap back against an obstacle (and the speed
+  // planner then slows down for the small clearance). In tight gaps it may keep what A* had.
+  const float pref = static_cast<float>(p_.clearance_pref), floor_need = static_cast<float>(p_.res * 1.5);
+  std::vector<float> dcell(cells.size());
+  for (size_t k = 0; k < cells.size(); ++k)
+    dcell[k] = dist_.at<float>(cells[k] / nx_, cells[k] % nx_);
+  std::vector<float> run_min(cells.size());
   std::vector<int> keep{cells.front()};
   size_t i = 0;
   while (i + 1 < cells.size())
   {
+    run_min[i] = dcell[i];
+    for (size_t k = i + 1; k < cells.size(); ++k)
+      run_min[k] = std::min(run_min[k - 1], dcell[k]);
     size_t j = cells.size() - 1;
-    while (j > i + 1 && !lineOfSight(cells[i] / nx_, cells[i] % nx_, cells[j] / nx_, cells[j] % nx_))
+    auto need = [&](size_t jj) { return std::max(floor_need, std::min(pref, run_min[jj]) - static_cast<float>(p_.res)); };
+    while (j > i + 1 && !lineOfSight(cells[i] / nx_, cells[i] % nx_, cells[j] / nx_, cells[j] % nx_, need(j)))
       --j;
     keep.push_back(cells[j]);
     i = j;
