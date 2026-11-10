@@ -18,3 +18,9 @@ camera:
   # Mirror support struts (Dont_Search_Angle_1..3), assumed in the robot frame, CCW from the front.
   strut_angles_deg: [47, 164, 285]
   strut_half_width_px: 1.5
+  # [s] from taking the image to black_item publishing its scan. black_item does not stamp its output,
+  # so camera_adapter stamps every scan "now - latency", and avoid_sim's virtual camera publishes
+  # exactly this late. A wrong value shifts everything the camera sees by speed x error, along the
+  # motion: the x estimate lags (wall fits) and faces ahead are remembered too far away.
+  # TO CALIBRATE on the robot (assumed, not measured).
+  latency: 0.06

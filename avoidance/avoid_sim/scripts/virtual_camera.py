@@ -12,6 +12,7 @@ while someone subscribes, at most image_rate Hz.
 """
 import collections
 import math
+import queue
 import threading
 import time
 
@@ -41,7 +42,10 @@ class VirtualCamera:
         self.scanner = Scanner(self.model)                              # black_item uses the configured centre
         self.pixel_noise = p('pixel_noise_std', 0.5)
         self.dropout = p('dropout', 0.01)
-        self.latency = p('latency', 0.03)
+        # published exactly this long after the moment the scan shows (camera_adapter stamps it so)
+        self.latency = p('latency', rospy.get_param('/camera/latency', 0.03))
+        self.due = queue.Queue()              # rendered scans waiting for their publish time
+        self.render_ms = collections.deque(maxlen=100)
         self.rng = np.random.default_rng(p('seed', 0) or None)
         self.history = collections.deque(maxlen=200)
         self.lock = threading.Lock()          # history is filled by the odometry callback, read by the timer
@@ -59,24 +63,22 @@ class VirtualCamera:
                          lambda ev: setattr(self, 'rng', np.random.default_rng(int(ev.seq) * 104729 + 2)))
         rospy.Subscriber('/sim/odom_true', Odometry, self.on_truth, queue_size=50)
         rospy.Timer(rospy.Duration(1.0 / p('rate', 30.0)), self.tick)
+        threading.Thread(target=self.deliver, daemon=True).start()
 
     def on_layout(self, msg):
         with self.lock:
             self.obstacles = [(q.position.x, q.position.y) for q in msg.poses]
             self.history.clear()                                        # the robot was teleported
+        while not self.due.empty():                                     # scans of the old field
+            try:
+                self.due.get_nowait()
+            except queue.Empty:
+                break
 
     def on_truth(self, msg):
         q = msg.pose.pose
         with self.lock:
             self.history.append((msg.header.stamp.to_sec(), q.position.x, q.position.y, yaw_of(q.orientation)))
-
-    def pose_at(self, t):
-        with self.lock:
-            hist = list(self.history)
-        for s in reversed(hist):
-            if s[0] <= t:
-                return s[1:]
-        return hist[0][1:] if hist else None
 
     def tick(self, _):
         # an exception would end the rospy timer for good: the camera would go silent while the node
@@ -86,18 +88,40 @@ class VirtualCamera:
         except Exception as e:
             rospy.logerr_throttle(5, 'virtual_camera: %s' % e)
 
+    # The image is taken at the latest true pose and published `latency` later, as black_item does.
+    # Before, the pose was picked first (the last sample before now - latency) and the scan published
+    # when rendering was done: the real latency was the configured one + 10 ms + the rendering time,
+    # 40-55 ms more than camera_adapter assumed (measured from wall hits; more under CPU load). That
+    # made the robot's x estimate lag (wall fits) and put faces ahead too far in its obstacle memory.
     def publish(self):
-        pose = self.pose_at(rospy.Time.now().to_sec() - self.latency)
-        if pose is None:
-            return
         with self.lock:
+            if not self.history:
+                return
+            t_image, x, y, yaw = self.history[-1]
             obstacles = list(self.obstacles)
-        black, red = self.renderer.render(*pose, obstacles)
-        self.black_pub.publish(Int32MultiArray(data=self.scanner.scan(
-            black, self.pixel_noise, self.dropout, self.rng).tolist()))
-        self.red_pub.publish(Int32MultiArray(data=self.scanner.scan(
-            red, self.pixel_noise, self.dropout, self.rng).tolist()))
-        self.publish_images(black, red)
+        t0 = time.perf_counter()
+        black, red = self.renderer.render(x, y, yaw, obstacles)
+        scans = (Int32MultiArray(data=self.scanner.scan(black, self.pixel_noise, self.dropout, self.rng).tolist()),
+                 Int32MultiArray(data=self.scanner.scan(red, self.pixel_noise, self.dropout, self.rng).tolist()))
+        self.render_ms.append((time.perf_counter() - t0) * 1000)
+        self.due.put((t_image + self.latency, scans, black, red))
+
+    def deliver(self):
+        while not rospy.is_shutdown():
+            try:
+                due, (black_scan, red_scan), black, red = self.due.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            while not rospy.is_shutdown() and rospy.Time.now().to_sec() < due:
+                time.sleep(0.001)
+            late = rospy.Time.now().to_sec() - due
+            if late > 0.01:
+                rospy.logwarn_throttle(10, 'virtual_camera: scans %.0f ms late (rendering takes %.0f ms, the camera '
+                                       'latency is %.0f ms): the robot sees the world later than it assumes; '
+                                       'CPU overloaded?' % (late * 1000, np.median(self.render_ms), self.latency * 1000))
+            self.black_pub.publish(black_scan)
+            self.red_pub.publish(red_scan)
+            self.publish_images(black, red)
 
     def image_layers(self):
         """What black_item marks on its frames, around the configured mirror centre. Under the

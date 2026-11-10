@@ -37,7 +37,8 @@ public:
     nh.param("/camera/strut_angles_deg", struts, std::vector<double>());
     pnh.param("strut_mask_half_deg", strut_half_deg_, 2.0);
     pnh.param("frame_id", frame_, std::string("base_link"));
-    pnh.param("latency", latency_, 0.03);
+    nh.param("/camera/latency", latency_, 0.03);          // shared with avoid_sim's virtual camera
+    pnh.param("latency", latency_, latency_);
     // black_item reports the first marked pixel, so on average half a pixel too far: undo that
     pnh.param("quantization_correction_px", quant_px_, 0.5);
     inner_range_ = omniDistanceCm(inner, cam_high, outer) / 100.0;
