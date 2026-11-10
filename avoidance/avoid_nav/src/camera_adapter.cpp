@@ -65,7 +65,10 @@ private:
   sensor_msgs::LaserScan convert(const std_msgs::Int32MultiArray& m, bool obstacles) const
   {
     sensor_msgs::LaserScan s;
-    s.header.stamp = ros::Time::now() - ros::Duration(latency_);   // black_item does not stamp its output
+    // black_item does not stamp its output: now - latency. Sim time starts at 0 and ros::Time cannot
+    // be negative (it throws), so not before that.
+    const ros::Time now = ros::Time::now();
+    s.header.stamp = now.toSec() > latency_ ? now - ros::Duration(latency_) : now;
     s.header.frame_id = frame_;
     const double inc = dir_ * step_deg_ * M_PI / 180.0;
     s.angle_min = 0.0;
