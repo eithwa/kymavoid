@@ -45,6 +45,9 @@ const TUNABLES = [
   ]],
   ['感測', [
     ['max_obstacle_range', '障礙物最遠距離', 'm', 0.1],
+    ['far_range', '遠距離層最遠（0 = 關）', 'm', 0.1],
+    ['far_cost', '遠距離層成本倍數', '×', 0.5],
+    ['far_shrink', '遠距離層車形內縮', 'm', 0.01],
     ['red_line_max_range', '紅線修正最遠', 'm', 0.1],
     ['wall_max_range', '矮牆修正最遠', 'm', 0.1],
     ['clear_margin', '清除餘量（最小）', 'm', 0.01],
@@ -74,7 +77,7 @@ const S = {
   ros: null, connected: false, everConnected: false,
   status: null, statusAt: 0, prevState: null,
   field: null, obsCfg: null, footprint: null,
-  obstacles: [], obstaclesAt: 0, path: [], scan: null, boundary: null,
+  obstacles: [], obstaclesAt: 0, obstaclesFar: [], path: [], scan: null, boundary: null,
   cspace: null, cspaceInfo: null,
   truth: null, layout: [], trail: [], truthTrail: [],
   isSim: false, sensor: null, nodes: null, nodesErr: null, watch: null, debug: null,
@@ -156,6 +159,7 @@ async function onConnected() {
   subscribe('/avoid/nodes', 'std_msgs/String', onNodes);
   subscribe('/avoid/path', 'nav_msgs/Path', (m) => { S.path = m.poses.map((p) => [p.pose.position.x, p.pose.position.y]); }, { throttle_rate: 200 });
   subscribe('/avoid/obstacles', 'sensor_msgs/PointCloud', (m) => { S.obstacles = m.points; S.obstaclesAt = now(); });
+  subscribe('/avoid/obstacles_far', 'sensor_msgs/PointCloud', (m) => { S.obstaclesFar = m.points; });
   subscribe('/avoid/debug', 'std_msgs/String', onDebug, { throttle_rate: 90 });
   subscribe('/odom', 'nav_msgs/Odometry', (m) => { if (!S.isSim) S.actualV = { v: Math.hypot(m.twist.twist.linear.x, m.twist.twist.linear.y), at: now() }; }, { throttle_rate: 100 });
   syncOptionalTopics();
@@ -438,7 +442,7 @@ function renderStatus() {
 // nav_node was reset: drop everything that belonged to the previous field / run
 function clearRunDisplay() {
   S.trail = []; S.truthTrail = []; S.speedHist = [];
-  S.obstacles = []; S.path = []; S.cspace = null; S.scan = null; S.boundary = null;
+  S.obstacles = []; S.obstaclesFar = []; S.path = []; S.cspace = null; S.scan = null; S.boundary = null;
 }
 
 function speedStats() {
@@ -928,6 +932,9 @@ function draw() {
   }
   // remembered obstacles (nav_node grid, field frame)
   const stale = now() - S.obstaclesAt > 2;
+  // far layer (beyond max_obstacle_range, 10 cm cells): only a cost for the planner
+  ctx.fillStyle = stale ? 'rgba(206,147,216,0.15)' : 'rgba(206,147,216,0.45)';
+  for (const p of S.obstaclesFar) ctx.fillRect(p.x - 0.05, p.y - 0.05, 0.1, 0.1);
   ctx.fillStyle = stale ? 'rgba(255,152,0,0.3)' : '#ff9800';
   const d = 0.02;
   for (const p of S.obstacles) ctx.fillRect(p.x - d / 2, p.y - d / 2, d, d);

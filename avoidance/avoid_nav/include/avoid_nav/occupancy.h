@@ -63,7 +63,9 @@ public:
 
   // Sensor at (sx, sy, sth) in the local frame when the scan was taken. Beams that are NaN (unknown)
   // or flagged (intensity > 0.5: camera inner ring, true range unknown) change nothing.
-  void update(double sx, double sy, double sth, const sensor_msgs::LaserScan& m, double max_range)
+  // mark_from: hits closer than this only clear (the far layer: the precise grid has them).
+  void update(double sx, double sy, double sth, const sensor_msgs::LaserScan& m, double max_range,
+              double mark_from = 0.0)
   {
     const int n = m.ranges.size();
     if (n == 0)
@@ -121,7 +123,7 @@ public:
         if (!prot)
           add(cx, cy, -p_.miss);
       }
-      if (std::isfinite(r))
+      if (std::isfinite(r) && r >= mark_from)
         add(sx + ca * r, sy + sa * r, sigma(r) <= p_.coarse_sigma ? p_.hit_precise : p_.hit_coarse);
     }
   }

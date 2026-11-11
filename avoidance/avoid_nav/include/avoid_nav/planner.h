@@ -10,6 +10,11 @@
 // at band_cost. Clearance, speed limits and line of sight all use the soft one. With a single 2 cm
 // boundary, 1-2 cm of map noise closed a 49 cm gap's 5 cm wide C-space corridor now and then, the
 // planner switched to a detour and the robot turned back and forth.
+//
+// Far obstacles (beyond the precise sensor range: the camera's range there is 10-20 cm per pixel) are
+// a cost, not a boundary: steps in their C-space cost far_cost x more. The route turns towards the
+// open side early, a wrong far reading never closes a passage, and within the precise range the
+// obstacle points decide.
 #pragma once
 #include <opencv2/core.hpp>
 
@@ -41,6 +46,14 @@ struct PlannerParams
   // detour on its left (5 of 22 runs turned back and forth, 0 of 18 with it).
   double v_max = 0.8, v_tight = 0.15, v_per_clearance = 8.0, a_max = 1.0, a_brake = 1.2;
   double start_snap = 0.10;           // if the robot cell is blocked, accept a free cell this close
+  // step cost x this inside the far obstacles' C-space: crossing a box seen far away (~0.85 m of
+  // C-space) costs like a 3.4 m detour, a sliver where a far gap looks a little too narrow almost nothing
+  double far_cost = 5.0;
+  // the far C-space is the footprint's eroded by this: far cells are 10 cm, their range is off by 10-20 cm
+  // and both errors narrow a gap. With the full footprint a 68 cm gap seen 3 m away cost x far_cost and
+  // the route switched to a detour (random seed 19: +1.4 s in 3 of 3 runs); eroded by 10 cm, gaps of
+  // 50 cm and more stay free and a 21 cm one (a dead end) still costs.
+  double far_shrink = 0.1;
 };
 
 struct Keepout
@@ -58,8 +71,10 @@ public:
   explicit GridPlanner(const PlannerParams& p = PlannerParams());
   void setFootprint(const Polygon& fp);
 
-  // Rebuild the maps. Obstacle points in the field frame; theta = current heading.
-  void build(const std::vector<Pt>& obstacles, double theta, const Keepout& k);
+  // Rebuild the maps. Obstacle points in the field frame; theta = current heading. far: coarse obstacle
+  // points beyond the precise range (cost only, see above).
+  void build(const std::vector<Pt>& obstacles, double theta, const Keepout& k,
+             const std::vector<Pt>& far = std::vector<Pt>());
 
   // A* from (x, y) to any pose whose footprint touches the goal line. Smoothed waypoints (field frame).
   // `previous`: the path being followed; staying near it is cheaper (a new route has to be clearly
@@ -76,13 +91,16 @@ public:
   bool free(double x, double y) const;
   double frontExtent() const { return front_; }
   const cv::Mat& cspace() const { return cspace_; }   // CV_8U, 1 = blocked; row = y, col = x
+  bool farCost(double x, double y) const;              // inside the far obstacles' C-space
   const PlannerParams& params() const { return p_; }
 
 private:
   bool cell(double x, double y, int& r, int& c) const;
   // straight segment between path cells i and j through free (soft) C-space, keeping at every point
   // the clearance the A* path had around the corresponding cells
-  bool lineOfSight(const std::vector<int>& cells, const std::vector<float>& need, size_t i, size_t j) const;
+  // and entering the far obstacles' C-space only where the A* path was in it (far_ok)
+  bool lineOfSight(const std::vector<int>& cells, const std::vector<float>& need, const std::vector<uint8_t>& far_ok,
+                   size_t i, size_t j) const;
   float stepFactor(int r, int c, double v_reach) const;   // cost factor of a cell (>= 1)
   double reachSpeed(int r, int c, int sr, int sc, double v0) const;
 
@@ -93,5 +111,6 @@ private:
   Keepout keep_;
   cv::Mat occ_, hard_, cspace_, dist_;   // hard_ / cspace_ (soft): 1 = blocked; dist_: CV_32F metres
                                          // to the soft boundary (0 inside it)
+  cv::Mat far_;                          // CV_8U, 1 = far obstacles' C-space (empty: none)
 };
 }  // namespace avoid_nav

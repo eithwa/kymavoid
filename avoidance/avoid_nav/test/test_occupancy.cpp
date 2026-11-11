@@ -2,7 +2,9 @@
 //  - a precise near reading clears a ghost that a coarse far reading left in front of a surface
 //    (the old fixed 10 cm stop could not, which narrowed passable gaps);
 //  - cells within corner_protect of a neighbouring beam's hit are not cleared (obstacle corners);
-//  - a coarse hit needs a second one before it counts as an obstacle, a precise one does not.
+//  - a coarse hit needs a second one before it counts as an obstacle, a precise one does not;
+//  - the far layer (mark_from) marks only hits beyond the precise range, and keeps a face whose
+//    reading flickers by a pixel.
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -107,6 +109,49 @@ TEST(OccGrid, CoarseHitNeedsConfirmation)
   OccGrid precise;                                              // no table: lidar, 2 cm
   precise.update(0.0, Y, 0.0, scan({{0, 2.01}}), 3.0);
   EXPECT_TRUE(occupiedAt(precise, 2.01, 0.01));
+}
+
+// The far layer as nav_node sets it up: 10 cm cells, clearing 2 sigma short of a hit, uncapped.
+OccParams farParams(bool capped)
+{
+  OccParams p;
+  p.res = 0.10;
+  p.clear_margin = 0.10;
+  if (!capped)
+    p.clear_max = 1.0;
+  return p;
+}
+
+TEST(OccGrid, FarLayerMarksOnlyBeyondMarkFrom)
+{
+  OccGrid g(farParams(false));
+  g.setSigmaTable(cameraLike());
+  for (int k = 0; k < 3; ++k)
+    g.update(0.0, Y, 0.0, scan({{0, 3.27}, {60, 1.57}}), 4.0, 2.5);
+  EXPECT_TRUE(g.occupied(-1.55, 0.05, 0.04).empty()) << "a near hit is the obstacle grid's";
+  EXPECT_FALSE(g.occupied(3.25, 0.05, 0.04).empty()) << "a far hit marks";
+  for (int k = 0; k < 6; ++k)
+    g.update(0.0, Y, 0.0, scan({{0, 2.0}}), 4.0, 2.5);
+  EXPECT_FALSE(g.occupied(3.25, 0.05, 0.04).empty()) << "behind a nearer hit: not seen, kept";
+  for (int k = 0; k < 6; ++k)
+    g.update(0.0, Y, 0.0, scan({}), 4.0, 2.5);
+  EXPECT_TRUE(g.occupied(3.25, 0.05, 0.04).empty()) << "beams that see through it clear it";
+}
+
+// A face 3.3 m ahead whose reading flickers between two pixels (3.27 / 3.37 m, one 10 cm cell apart):
+// the uncapped layer keeps both cells; with the 10 cm cap each far reading cleared the nearer cell, so
+// only the farther one stayed and the face looked 10 cm further away.
+TEST(OccGrid, FarLayerKeepsAFlickeringFace)
+{
+  for (bool capped : {false, true})
+  {
+    OccGrid g(farParams(capped));
+    g.setSigmaTable(cameraLike());
+    for (int k = 0; k < 8; ++k)
+      g.update(0.0, Y, 0.0, scan({{0, k % 2 ? 3.37 : 3.27}}), 4.0, 2.5);
+    EXPECT_EQ(!g.occupied(3.25, 0.05, 0.04).empty(), !capped) << (capped ? "capped" : "uncapped");
+    EXPECT_FALSE(g.occupied(3.35, 0.05, 0.04).empty());
+  }
 }
 
 int main(int argc, char** argv)

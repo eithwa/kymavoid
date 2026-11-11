@@ -30,6 +30,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <condition_variable>
 #include <cstdlib>
 #include <memory>
@@ -149,6 +150,7 @@ public:
     path_pub_ = nh.advertise<nav_msgs::Path>("avoid/path", 2);
     debug_pub_ = nh.advertise<std_msgs::String>("avoid/debug", 5);
     obstacles_pub_ = nh.advertise<sensor_msgs::PointCloud>("avoid/obstacles", 2);
+    obstacles_far_pub_ = nh.advertise<sensor_msgs::PointCloud>("avoid/obstacles_far", 2);   // far layer, 10 cm cells
     cspace_pub_ = nh.advertise<nav_msgs::OccupancyGrid>("avoid/cspace", 1);
     subs_.push_back(nh.subscribe("scan", 5, &NavNode::onScan, this));
     subs_.push_back(nh.subscribe("boundary", 5, &NavNode::onBoundary, this));
@@ -200,6 +202,7 @@ private:
     const char* name;
     double NavNode::*field;
     double def;
+    double def_lidar = std::numeric_limits<double>::quiet_NaN();   // NaN: def for both sensors
   };
   static const std::vector<Tune>& tunables()
   {
@@ -224,7 +227,12 @@ private:
         // below the planner's 2 cm obstacle inflation: the safety layer must not veto paths the planner
         // finds (3 cm stopped the robot for good in a 49 cm gap with 1-2 cm of map noise)
         {"safety_margin", &NavNode::safety_margin_, 0.01},
-        {"max_obstacle_range", &NavNode::max_obs_range_, -1},   // default depends on the sensor
+        {"max_obstacle_range", &NavNode::max_obs_range_, 2.5, 6.0},
+        // beyond max_obstacle_range up to this: the far layer, a cost for the planner only (camera: 10-20 cm
+        // per pixel there, too coarse for the obstacle map, enough to pick the open side early); 0 = off
+        {"far_range", &NavNode::far_range_, 4.0, 0.0},
+        {"far_cost", &NavNode::far_cost_, 5.0},          // planner step cost x this in the far obstacles' C-space
+        {"far_shrink", &NavNode::far_shrink_, 0.1},      // [m] far C-space from the footprint eroded by this (gaps >= 50 cm stay free)
         {"red_line_max_range", &NavNode::red_max_range_, 1.5},  // real images: red lines unreliable beyond ~1 m
         {"wall_max_range", &NavNode::wall_max_range_, 2.5},
         {"line_margin_base", &NavNode::line_margin_base_, 0.02},
@@ -241,7 +249,7 @@ private:
   void loadTuning()
   {
     for (const Tune& t : tunables())
-      pnh_.param(t.name, this->*t.field, t.def >= 0 ? t.def : (sensor_ == "camera" ? 2.5 : 6.0));
+      pnh_.param(t.name, this->*t.field, sensor_ == "camera" || std::isnan(t.def_lidar) ? t.def : t.def_lidar);
     // the planner uses the same speed model and never plans closer to an obstacle than the safety
     // layer allows
     PlannerParams pp;
@@ -252,6 +260,8 @@ private:
     pp.v_per_clearance = v_per_clear_;
     pp.a_max = a_max_;
     pp.a_brake = a_brake_;
+    pp.far_cost = far_cost_;
+    pp.far_shrink = far_shrink_;
     planner_template_ = GridPlanner(pp);
     planner_template_.setFootprint(footprint_);
     OccParams op;
@@ -259,6 +269,16 @@ private:
     op.clear_sigmas = clear_sigmas_;
     grid_ = OccGrid(op);
     grid_.setSigmaTable(sigma_table_);
+    // far layer: 10 cm cells (a far reading is 10-20 cm per pixel); a beam stops clearing 2 sigma short
+    // of its hit, uncapped: with the near grid's 10 cm cap a reading one pixel further cleared the nearer
+    // cell, so only the farthest reading of a face stayed (the face looked up to a pixel further away)
+    OccParams fo;
+    fo.res = 0.10;
+    fo.clear_max = 1.0;
+    fo.clear_margin = 0.10;
+    fo.clear_sigmas = clear_sigmas_;
+    far_grid_ = OccGrid(fo);
+    far_grid_.setSigmaTable(sigma_table_);
   }
 
   // Write the current parameter-server values (what the next start will use) back to the tuning
@@ -382,6 +402,8 @@ private:
     const Pose2 at_scan = localAt(m.header.stamp.isZero() ? t : m.header.stamp.toSec());
     const Pose2 now_from_scan = compose(inverse(local_), at_scan);
     grid_.update(at_scan.x, at_scan.y, at_scan.th, m, max_obs_range_);
+    if (far_range_ > max_obs_range_)              // every beam clears, only the far hits mark
+      far_grid_.update(at_scan.x, at_scan.y, at_scan.th, m, far_range_, max_obs_range_);
     std::vector<Pt> frame;
     for (size_t k = 0; k < m.ranges.size(); ++k)
     {
@@ -530,11 +552,12 @@ private:
     local_ = start_;
     imu0_ = imu_yaw_;
     grid_.clear();
+    far_grid_.clear();
     history_.clear();
     path_.clear();
     ref_.clear();
     path_ok_ = false;
-    occupied_cells_ = 0;                            // /avoid/debug must not keep showing the old map
+    occupied_cells_ = far_cells_ = 0;               // /avoid/debug must not keep showing the old map
     ++run_id_;                                      // plans computed before this are dropped
     cmd_ = geometry_msgs::Twist();
     lines_accepted_ = lines_rejected_ = walls_accepted_ = walls_rejected_ = 0;
@@ -563,7 +586,10 @@ private:
       const Pose2 F = fieldPose();
       const Pose2 T = compose(F, inverse(local_));             // local -> field
       const Pose2 base_from_local = inverse(local_);
+      const Pose2 local_now = local_;
       const std::vector<Pt> cells = grid_.occupied();
+      const std::vector<Pt> far_cells = far_grid_.occupied();
+      const double far_from = max_obs_range_ - kFarHandover;
       Keepout k = keep_;
       k.line_margin = line_margin_base_ + line_margin_sigma_ * std::sqrt(std::max(0.0, loc_.cov()(1, 1)));
       k.goal_x += finishMargin();                                // the path reaches the finish condition
@@ -590,9 +616,23 @@ private:
           continue;
         obs.push_back(apply(T, c));
       }
+      // Far layer: only beyond the precise range, less a handover band where the obstacle grid has not
+      // marked a box yet (two scans). Closer, the precise grid decides: a far reading off by 30 cm stays
+      // behind the box it saw, unseen and uncleared. Near the low wall (localised) and outside the red
+      // lines (keep-out anyway) it adds nothing.
+      std::vector<Pt> far;
+      for (const Pt& c : far_cells)
+      {
+        if (std::hypot(c.x - local_now.x, c.y - local_now.y) < far_from)
+          continue;
+        const Pt q = apply(T, c);
+        if (q.x >= k.front_wall_x - kFarWallBand || q.x <= k.back_wall_x + kFarWallBand || std::fabs(q.y) > k.red_inner + 0.15)
+          continue;
+        far.push_back(q);
+      }
       std::vector<Pt> path;
       const ros::WallTime w0 = ros::WallTime::now();
-      pl->build(obs, F.th, k);
+      pl->build(obs, F.th, k, far);
       const ros::WallTime w1 = ros::WallTime::now();
       // Tracker: plan from where the robot will be when the plan is in use, and join the path the way
       // the robot is moving (joinFromVelocity). Planned from the snapshot pose, at 1.1 m/s the robot was
@@ -623,6 +663,7 @@ private:
       ref_ = ref;
       path_ok_ = ok;
       occupied_cells_ = cells.size();
+      far_cells_ = far.size();
       build_ms_ = (w1 - w0).toSec() * 1e3;
       plan_ms_ = (w2 - w1).toSec() * 1e3;
       max_plan_ms_ = std::max(max_plan_ms_, build_ms_ + plan_ms_);
@@ -634,7 +675,7 @@ private:
       // stamped with the snapshot time: the obstacles were mapped into the field frame with the pose
       // of that moment, 20-100+ ms before planning finished
       publishPath(snap_time);
-      publishMaps(snap_time, obs, *pl);
+      publishMaps(snap_time, obs, far, *pl);
     }
   }
 
@@ -649,6 +690,7 @@ private:
     pc.header.stamp = now;
     pc.header.frame_id = "field";
     obstacles_pub_.publish(pc);
+    obstacles_far_pub_.publish(pc);
     nav_msgs::OccupancyGrid g;
     g.header = pc.header;
     g.info.origin.orientation.w = 1;
@@ -1008,6 +1050,7 @@ private:
           // recovery (as move_base clears its costmap): forget everything beyond 1 m and re-observe
           // it; the cells next to the robot stay, they may be inside the camera's inner ring
           grid_.clearOutside(local_.x, local_.y, 1.0);
+          far_grid_.clearOutside(local_.x, local_.y, 1.0);
           recovered_ = true;
           ROS_WARN("nav_node: no path for %.1f s, cleared the obstacle grid beyond 1 m", recovery_after_);
         }
@@ -1067,7 +1110,7 @@ private:
   }
 
   // obstacle points and C-space in the field frame, for debugging and the web UI (2 Hz)
-  void publishMaps(const ros::Time& now, const std::vector<Pt>& obs, const GridPlanner& planner)
+  void publishMaps(const ros::Time& now, const std::vector<Pt>& obs, const std::vector<Pt>& far, const GridPlanner& planner)
   {
     if ((now - last_maps_).toSec() < 0.5)
       return;
@@ -1083,6 +1126,15 @@ private:
       pc.points.push_back(p);
     }
     obstacles_pub_.publish(pc);
+    pc.points.clear();
+    for (const Pt& q : far)
+    {
+      geometry_msgs::Point32 p;
+      p.x = q.x;
+      p.y = q.y;
+      pc.points.push_back(p);
+    }
+    obstacles_far_pub_.publish(pc);
     const cv::Mat& c = planner.cspace();
     nav_msgs::OccupancyGrid g;
     g.header = pc.header;
@@ -1130,7 +1182,7 @@ private:
     // JSON has no inf, write the usual 99 ("not limiting")
     const auto lim = [](double v) { return std::isfinite(v) ? std::min(v, 99.0) : 99.0; };
     std::ostringstream os;
-    os << "{\"occupied_cells\": " << occupied_cells_ << ", \"path_ok\": " << (path_ok_ ? "true" : "false")
+    os << "{\"occupied_cells\": " << occupied_cells_ << ", \"far_cells\": " << far_cells_ << ", \"path_ok\": " << (path_ok_ ? "true" : "false")
        << ", \"waypoints\": " << path_.size() << ", \"v_limit\": " << lim(last_vlimit_) << ", \"d_free\": " << last_dfree_
        << ", \"safety\": " << (safety_active_ ? "true" : "false") << ", \"lines_accepted\": " << lines_accepted_
        << ", \"lines_rejected\": " << lines_rejected_ << ", \"walls_accepted\": " << walls_accepted_
@@ -1155,9 +1207,12 @@ private:
   double v_max_, a_max_, a_brake_, react_time_ = 0.1, stop_margin_, v_tight_, v_per_clear_, lookahead_, k_heading_, w_max_;
   double safety_margin_, max_obs_range_, line_margin_base_, line_margin_sigma_, no_path_timeout_;
   double clear_margin_ = 0.02, clear_sigmas_ = 2.0, recovery_after_ = 1.0, route_keep_ = 0.7, wall_margin_ = 0.08;
+  double far_range_ = 4.0, far_cost_ = 5.0, far_shrink_ = 0.1;
+  static constexpr double kFarHandover = 0.5;      // [m] far cells count from max_obstacle_range - this
+  static constexpr double kFarWallBand = 0.3;      // [m] far cells this close to the low wall are the wall
   double tracker_ = 1.0, keep_gap_ = 0.08, a_lat_frac_ = 0.8, k_track_ = 2.0, track_preview_ = 0.1;
   std::vector<float> sigma_table_;                 // range uncertainty per cm of range (camera), empty = lidar
-  size_t occupied_cells_ = 0;
+  size_t occupied_cells_ = 0, far_cells_ = 0;
   bool recovered_ = false;
   // state
   uint8_t state_ = IDLE;
@@ -1179,6 +1234,7 @@ private:
   Keepout keep_;
   Polygon footprint_;
   OccGrid grid_;                                    // obstacle layer, local frame
+  OccGrid far_grid_;                                // far layer (beyond max_obstacle_range), local frame
   std::deque<std::pair<double, Pose2>> history_;   // (time, local pose), last 2 s
   std::vector<Pt> path_;
   std::vector<RefPoint> ref_;                       // path_ with its corners rounded (tracker), same planner_
@@ -1198,7 +1254,7 @@ private:
   double red_max_range_ = 1.5, wall_max_range_ = 2.5;
   geometry_msgs::Twist cmd_;
   // ROS
-  ros::Publisher cmd_pub_, status_pub_, pose_pub_, path_pub_, debug_pub_, obstacles_pub_, cspace_pub_;
+  ros::Publisher cmd_pub_, status_pub_, pose_pub_, path_pub_, debug_pub_, obstacles_pub_, obstacles_far_pub_, cspace_pub_;
   ros::Time last_maps_;
   std::vector<ros::Subscriber> subs_;
   ros::ServiceServer cmd_srv_;

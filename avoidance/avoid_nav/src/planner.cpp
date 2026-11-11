@@ -29,7 +29,7 @@ bool GridPlanner::cell(double x, double y, int& r, int& c) const
   return r >= 0 && r < ny_ && c >= 0 && c < nx_;
 }
 
-void GridPlanner::build(const std::vector<Pt>& obstacles, double theta, const Keepout& k)
+void GridPlanner::build(const std::vector<Pt>& obstacles, double theta, const Keepout& k, const std::vector<Pt>& far)
 {
   keep_ = k;
   occ_ = cv::Mat::zeros(ny_, nx_, CV_8U);
@@ -72,6 +72,40 @@ void GridPlanner::build(const std::vector<Pt>& obstacles, double theta, const Ke
   cv::fillPoly(kernel, std::vector<std::vector<cv::Point>>{pts}, cv::Scalar(1));
   cv::dilate(occ_, hard_, kernel, cv::Point(half, half), 1, cv::BORDER_CONSTANT, cv::Scalar(0));
 
+  // far C-space: the same dilation, stamped at each of the few far cells (a full-grid dilate costs as
+  // much as the obstacles' C-space, for a few dozen points); robot positions p whose footprint covers
+  // s: p = s - (k - half)
+  far_.release();
+  if (!far.empty())
+  {
+    far_ = cv::Mat::zeros(ny_, nx_, CV_8U);
+    cv::Mat fk = kernel;
+    const int sh = static_cast<int>(std::lround(p_.far_shrink / p_.res));
+    if (sh > 0)
+      cv::erode(kernel, fk, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * sh + 1, 2 * sh + 1)),
+                cv::Point(-1, -1), 1, cv::BORDER_CONSTANT, cv::Scalar(0));
+    for (const Pt& q : far)
+    {
+      int r, c;
+      if (!cell(q.x, q.y, r, c))
+        continue;
+      for (int kr = 0; kr < fk.rows; ++kr)
+      {
+        const int rr = r - (kr - half);
+        if (rr < 0 || rr >= ny_)
+          continue;
+        const uint8_t* krow = fk.ptr<uint8_t>(kr);
+        uint8_t* frow = far_.ptr<uint8_t>(rr);
+        for (int kc = 0; kc < fk.cols; ++kc)
+        {
+          const int cc = c - (kc - half);
+          if (krow[kc] && cc >= 0 && cc < nx_)
+            frow[cc] = 1;
+        }
+      }
+    }
+  }
+
   // soft C-space = hard C-space grown by the band (Minkowski sums commute: inflating the obstacles
   // first and then dilating by the footprint is the same as growing the C-space)
   cv::Mat freemask = (hard_ == 0);
@@ -88,6 +122,12 @@ bool GridPlanner::free(double x, double y) const
 {
   int r, c;
   return cell(x, y, r, c) && cspace_.at<uint8_t>(r, c) == 0;
+}
+
+bool GridPlanner::farCost(double x, double y) const
+{
+  int r, c;
+  return !far_.empty() && cell(x, y, r, c) && far_.at<uint8_t>(r, c);
 }
 
 double GridPlanner::clearance(double x, double y) const
@@ -131,10 +171,13 @@ float GridPlanner::stepFactor(int r, int c, double v_reach) const
     f = std::max(f, static_cast<float>(v_reach / v));       // travel time relative to the fastest possible
   if (cspace_.at<uint8_t>(r, c))
     f *= static_cast<float>(p_.band_cost);                  // between the hard and the soft boundary
+  if (!far_.empty() && far_.at<uint8_t>(r, c))
+    f *= static_cast<float>(p_.far_cost);                   // an obstacle seen far away, roughly
   return f;
 }
 
-bool GridPlanner::lineOfSight(const std::vector<int>& cells, const std::vector<float>& need, size_t i, size_t j) const
+bool GridPlanner::lineOfSight(const std::vector<int>& cells, const std::vector<float>& need,
+                              const std::vector<uint8_t>& far_ok, size_t i, size_t j) const
 {
   const int r0 = cells[i] / nx_, c0 = cells[i] % nx_, r1 = cells[j] / nx_, c1 = cells[j] % nx_;
   const int n = std::max(std::abs(r1 - r0), std::abs(c1 - c0));
@@ -144,6 +187,8 @@ bool GridPlanner::lineOfSight(const std::vector<int>& cells, const std::vector<f
     const int c = c0 + (n ? (c1 - c0) * m / n : 0);
     const size_t k = i + (n ? (j - i) * static_cast<size_t>(m) / static_cast<size_t>(n) : 0);
     if (cspace_.at<uint8_t>(r, c) || dist_.at<float>(r, c) < need[k])
+      return false;
+    if (!far_.empty() && far_.at<uint8_t>(r, c) && !far_ok[k])
       return false;
   }
   return true;
@@ -257,12 +302,21 @@ bool GridPlanner::plan(double x, double y, std::vector<Pt>& path, const std::vec
       local = std::min(local, dist_.at<float>(cells[q] / nx_, cells[q] % nx_));
     need[k] = std::max(floor_need, std::min(want, local) - static_cast<float>(p_.res));
   }
+  // a shortcut may cross the far obstacles' C-space only where A* (which paid for it) did, +-w cells
+  std::vector<uint8_t> far_ok(cells.size(), 1);
+  if (!far_.empty())
+    for (size_t k = 0; k < cells.size(); ++k)
+    {
+      far_ok[k] = 0;
+      for (size_t q = (k >= static_cast<size_t>(w) ? k - w : 0); q <= std::min(cells.size() - 1, k + w) && !far_ok[k]; ++q)
+        far_ok[k] = far_.at<uint8_t>(cells[q] / nx_, cells[q] % nx_);
+    }
   std::vector<int> keep_cells{cells.front()};
   size_t i = 0;
   while (i + 1 < cells.size())
   {
     size_t j = cells.size() - 1;
-    while (j > i + 1 && !lineOfSight(cells, need, i, j))
+    while (j > i + 1 && !lineOfSight(cells, need, far_ok, i, j))
       --j;
     keep_cells.push_back(cells[j]);
     i = j;

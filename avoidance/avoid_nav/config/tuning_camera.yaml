@@ -17,7 +17,10 @@ route_keep: 0.7           # A* cost x this near the current path: a new route mu
 k_heading: 1.5            # heading P gain
 w_max: 1.0                # [rad/s]
 safety_margin: 0.01       # [m] safety layer: footprint sweep margin (below the planner's 2 cm inflation)
-max_obstacle_range: 2.5    # [m] obstacle readings farther than this are ignored
+max_obstacle_range: 2.5    # [m] obstacle map up to here (farther: far layer, if far_range is larger)
+far_range: 4.0             # [m] far layer up to here (beyond max_obstacle_range): planner cost only; 0 = off
+far_cost: 5.0             # planner step cost x this in the far obstacles' C-space
+far_shrink: 0.1           # [m] that C-space from the footprint eroded by this (far cells are coarse: gaps >= 50 cm stay free)
 red_line_max_range: 1.5   # [m] red-line fits only from closer points
 wall_max_range: 2.5       # [m] low-wall fits only from closer points (camera)
 line_margin_base: 0.02    # [m] keep-out inside the red lines ...
