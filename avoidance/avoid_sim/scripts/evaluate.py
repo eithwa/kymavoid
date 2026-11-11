@@ -69,11 +69,9 @@ def point_in_poly(p, poly):
     return inside
 
 
-def poly_box_distance(poly, box):
-    """0 when the footprint polygon touches/overlaps the axis-aligned box (x0, y0, x1, y1)."""
-    x0, y0, x1, y1 = box
-    corners = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
-    if any(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 for p in poly) or any(point_in_poly(c, poly) for c in corners):
+def poly_box_distance(poly, corners):
+    """0 when the footprint polygon touches/overlaps the box (its 4 corners, any yaw)."""
+    if any(point_in_poly(p, corners) for p in poly) or any(point_in_poly(c, poly) for c in corners):
         return 0.0
     best = 1e9
     for i in range(len(poly)):
@@ -87,7 +85,7 @@ def poly_box_distance(poly, box):
 class Trial:
     def __init__(self, f, fp, obstacles):
         self.f, self.fp = f, fp
-        self.boxes = [f.obstacle_box(o.x, o.y) for o in obstacles]
+        self.boxes = [(o.x, o.y, o.theta, f.obstacle_corners(o.x, o.y, o.theta)) for o in obstacles]
         self.min_obs = self.min_line = 1e9
         self.loc_err = []
         self.result = None
@@ -95,9 +93,12 @@ class Trial:
     def judge(self, x, y, yaw):
         poly = footprint_world(self.fp, x, y, yaw)
         d_obs = 1e9
-        for b in self.boxes:                                  # exact distance only for nearby boxes
-            far = max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0.0)
-            d_obs = min(d_obs, far - 0.25 if far > 0.35 else poly_box_distance(poly, b))
+        h = self.f.size / 2
+        for bx, by, byaw, corners in self.boxes:              # exact distance only for nearby boxes
+            c, s = math.cos(byaw), math.sin(byaw)             # robot centre in the box's frame
+            u, v = c * (x - bx) + s * (y - by), -s * (x - bx) + c * (y - by)
+            far = max(abs(u) - h, abs(v) - h, 0.0)
+            d_obs = min(d_obs, far - 0.25 if far > 0.35 else poly_box_distance(poly, corners))
         d_line = self.f.red_inner - np.abs(poly[:, 1]).max()
         self.min_obs, self.min_line = min(self.min_obs, d_obs), min(self.min_line, d_line)
         if d_obs <= 0:
@@ -182,7 +183,7 @@ def run_cases(ev, args):
             continue
         x, y, yaw = c['start']
         req = dict(seed=int(c['seed']), layout='case', start_error_xy=0.0, start_error_yaw=0.0,
-                   use_obstacles=[Pose2D(o[0], o[1], 0.0) for o in c['obstacles']],
+                   use_obstacles=[Pose2D(o[0], o[1], math.radians(o[2]) if len(o) > 2 else 0.0) for o in c['obstacles']],
                    use_start=[Pose2D(x, y, math.radians(yaw))])
         problems = []
         for k in range(args.repeat):

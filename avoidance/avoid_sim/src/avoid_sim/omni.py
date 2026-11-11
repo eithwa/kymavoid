@@ -15,6 +15,8 @@ import math
 
 import numpy as np
 
+from avoid_sim.geometry import pose3
+
 NO_HIT = 999
 
 
@@ -82,18 +84,36 @@ class MaskRenderer:
             n = len(ux)
             return np.full((n, 0), np.inf), np.full((n, 0), np.inf)
         b = np.asarray(boxes, dtype=float)
+        return MaskRenderer._slabs(ox, oy, ux[:, None], uy[:, None], b[:, 0], b[:, 1], b[:, 2], b[:, 3])
+
+    @staticmethod
+    def _ray_squares(ox, oy, ux, uy, poses, h):
+        """Entry/exit distance of rays (N) through squares of half size h at poses (M, x y [yaw]):
+        the rays in every box's own frame, where it is axis aligned."""
+        if not poses:
+            n = len(ux)
+            return np.full((n, 0), np.inf), np.full((n, 0), np.inf)
+        P = np.array([pose3(p) for p in poses])
+        c, s = np.cos(P[:, 2]), np.sin(P[:, 2])
+        dx, dy = ox - P[:, 0], oy - P[:, 1]
+        lux, luy = ux[:, None] * c + uy[:, None] * s, -ux[:, None] * s + uy[:, None] * c
+        return MaskRenderer._slabs(c * dx + s * dy, -s * dx + c * dy, lux, luy, -h, -h, h, h)
+
+    @staticmethod
+    def _slabs(ox, oy, ux, uy, x0, y0, x1, y1):
+        """Slab test, every argument broadcast to (N rays, M boxes)."""
         with np.errstate(divide='ignore', invalid='ignore'):
-            ix = 1.0 / ux[:, None]
-            iy = 1.0 / uy[:, None]
-            tx0, tx1 = (b[:, 0] - ox) * ix, (b[:, 2] - ox) * ix
-            ty0, ty1 = (b[:, 1] - oy) * iy, (b[:, 3] - oy) * iy
+            ix = 1.0 / ux
+            iy = 1.0 / uy
+            tx0, tx1 = (x0 - ox) * ix, (x1 - ox) * ix
+            ty0, ty1 = (y0 - oy) * iy, (y1 - oy) * iy
         # rays parallel to an axis: inside the slab -> (-inf, inf), outside -> miss
         px = np.isinf(ix)
-        tx0 = np.where(px, np.where((ox >= b[:, 0]) & (ox <= b[:, 2]), -np.inf, np.inf), tx0)
-        tx1 = np.where(px, np.where((ox >= b[:, 0]) & (ox <= b[:, 2]), np.inf, -np.inf), tx1)
+        tx0 = np.where(px, np.where((ox >= x0) & (ox <= x1), -np.inf, np.inf), tx0)
+        tx1 = np.where(px, np.where((ox >= x0) & (ox <= x1), np.inf, -np.inf), tx1)
         py = np.isinf(iy)
-        ty0 = np.where(py, np.where((oy >= b[:, 1]) & (oy <= b[:, 3]), -np.inf, np.inf), ty0)
-        ty1 = np.where(py, np.where((oy >= b[:, 1]) & (oy <= b[:, 3]), np.inf, -np.inf), ty1)
+        ty0 = np.where(py, np.where((oy >= y0) & (oy <= y1), -np.inf, np.inf), ty0)
+        ty1 = np.where(py, np.where((oy >= y0) & (oy <= y1), np.inf, -np.inf), ty1)
         t_in = np.maximum(np.minimum(tx0, tx1), np.minimum(ty0, ty1))
         t_out = np.minimum(np.maximum(tx0, tx1), np.maximum(ty0, ty1))
         hit = (t_out >= np.maximum(t_in, 0.0))
@@ -108,11 +128,12 @@ class MaskRenderer:
         return near * self.cam_h / (self.cam_h - height)
 
     def render(self, x, y, yaw, obstacles):
-        """(black, red) boolean masks for the robot at (x, y, yaw) [m, rad] and obstacle centres."""
+        """(black, red) boolean masks for the robot at (x, y, yaw) [m, rad] and obstacle poses
+        ((x, y) centres or (x, y, yaw))."""
         ang = yaw + self.bin_phi
         ux, uy = np.cos(ang), np.sin(ang)
         f = self.f
-        ob_in, _ = self._ray_boxes(x, y, ux, uy, [f.obstacle_box(ox, oy) for ox, oy in obstacles])
+        ob_in, _ = self._ray_squares(x, y, ux, uy, list(obstacles), f.size / 2)
         wa_in, _ = self._ray_boxes(x, y, ux, uy, f.walls())
         rd_in, rd_out = self._ray_boxes(x, y, ux, uy, f.red_strips())
         ob_near = ob_in.min(axis=1) if ob_in.shape[1] else np.full(self.bins, np.inf)

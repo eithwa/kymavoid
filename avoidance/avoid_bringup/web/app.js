@@ -224,7 +224,9 @@ function syncOptionalTopics() {
   } else { unsubscribe('/avoid/cspace'); S.cspace = null; }
   if (S.isSim) {
     subscribe('/sim/odom_true', 'nav_msgs/Odometry', onTruth, { throttle_rate: 100 });
-    subscribe('/avoid_sim/layout', 'geometry_msgs/PoseArray', (m) => { S.layout = m.poses.map((p) => [p.position.x, p.position.y]); });
+    subscribe('/avoid_sim/layout', 'geometry_msgs/PoseArray', (m) => {
+      S.layout = m.poses.map((p) => [p.position.x, p.position.y, 2 * Math.atan2(p.orientation.z, p.orientation.w)]);
+    });
     // latched, seq = seed: also catches resets made by others (start-up, evaluate.py)
     subscribe('/avoid_sim/reset_event', 'std_msgs/Header', (m) => {
       if (S.lastSeed !== m.seq) { S.trail = []; S.truthTrail = []; }
@@ -928,7 +930,9 @@ function draw() {
   if (S.isSim && S.layout.length) {
     const h = ((S.obsCfg && S.obsCfg.size) || 0.45) / 2;
     ctx.fillStyle = showTruth ? '#3b414b' : 'rgba(59,65,75,0.35)';
-    for (const [x, y] of S.layout) ctx.fillRect(x - h, y - h, 2 * h, 2 * h);
+    for (const [x, y, yaw] of S.layout) {             // 'route' layouts turn the boxes
+      ctx.save(); ctx.translate(x, y); ctx.rotate(yaw || 0); ctx.fillRect(-h, -h, 2 * h, 2 * h); ctx.restore();
+    }
   }
   // remembered obstacles (nav_node grid, field frame)
   const stale = now() - S.obstaclesAt > 2;

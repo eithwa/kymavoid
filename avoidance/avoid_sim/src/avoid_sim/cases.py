@@ -11,7 +11,8 @@ the noise seed: it reseeds the simulated odometry and camera, so a case replays 
     seed: 2                           # noise seed (and the layout seed it came from, if any)
     layout: random                    # where the obstacles came from (information only)
     start: [-2.0, 0.0, 0.0]           # x [m], y [m], yaw [deg]
-    obstacles: [[-0.31, -0.5], ...]   # centres [m]; the size comes from /obstacles/size
+    obstacles: [[-0.31, -0.5], ...]   # centres [m], or [x, y, yaw deg] for a turned box; the size comes
+                                      # from /obstacles/size
     note: what went wrong / what to look at
     observed: what happened when it was recorded
     expect: {result: success, max_time: 8.0}
@@ -21,6 +22,7 @@ expect keys: result (success | collision | line | timeout | safe_stop), max_time
 min_obstacle [m], min_line [m]. Missing keys are not checked; no expect = {result: success}.
 """
 import datetime
+import math
 import os
 
 import yaml
@@ -101,7 +103,7 @@ def append(path, case):
 
 
 def make(seed, layout, start, obstacles, sensor, note='', observed='', expect=None, status='open', case_id=''):
-    """start: (x, y, yaw_rad); obstacles: [(x, y)]."""
+    """start: (x, y, yaw_rad); obstacles: [(x, y)] or [(x, y, yaw_rad)] (the yaw is stored only when not 0)."""
     now = datetime.datetime.now()
     return {
         'id': case_id or 'case-%s-seed%d' % (now.strftime('%Y%m%d-%H%M%S'), seed),
@@ -110,7 +112,8 @@ def make(seed, layout, start, obstacles, sensor, note='', observed='', expect=No
         'seed': int(seed),
         'layout': layout,
         'start': [round(float(start[0]), 4), round(float(start[1]), 4), round(float(start[2]) * 180.0 / 3.141592653589793, 3)],
-        'obstacles': [[round(float(x), 4), round(float(y), 4)] for x, y in obstacles],
+        'obstacles': [[round(float(o[0]), 4), round(float(o[1]), 4)] +
+                      ([round(math.degrees(float(o[2])), 3)] if len(o) > 2 and o[2] else []) for o in obstacles],
         'note': note,
         'observed': observed,
         'expect': dict(expect) if expect else {'result': 'success'},

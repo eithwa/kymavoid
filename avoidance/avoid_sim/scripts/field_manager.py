@@ -3,8 +3,9 @@
 
 reset: pause physics -> robot back to the start pose (optionally with a placement error, or an
 explicit pose) -> obstacles re-placed (random to spec with a seed; 'route': random without the gap
-spec, only one route of route_width guaranteed; the original 'classic' layout; or explicit centres
-from a recorded case) -> publish the layout (latched) and an event so the other
+spec, only one route of route_width guaranteed, boxes turned by a random yaw if route_rotate; the
+original 'classic' layout; or explicit poses from a recorded case) -> publish the layout (latched,
+with every box's yaw) and an event so the other
 sim nodes can reset -> unpause.
 save_case: append the current field to a case file in avoid_sim/cases (avoid_sim.cases).
 """
@@ -24,7 +25,7 @@ from std_msgs.msg import Header
 from std_srvs.srv import Empty
 
 from avoid_sim import cases
-from avoid_sim.geometry import (CLASSIC_LAYOUT, Field, layout_violations, load_footprint, sample_layout,
+from avoid_sim.geometry import (CLASSIC_LAYOUT, Field, layout_violations, load_footprint, pose3, sample_layout,
                                 sample_layout_route, ConfigSpace)
 
 ROBOT = 'avoid_robot'
@@ -104,7 +105,7 @@ class FieldManager:
         if obstacles:
             if len(obstacles) > self.f.count:
                 raise ValueError('%d obstacles given, only %d spawned (/obstacles/count)' % (len(obstacles), self.f.count))
-            layout = [(o.x, o.y) for o in obstacles]
+            layout = [(o.x, o.y, o.theta) for o in obstacles]
             layout_name = layout_name or 'case'
         elif layout_name == 'classic':
             layout = list(CLASSIC_LAYOUT[:self.f.count])
@@ -118,18 +119,19 @@ class FieldManager:
             sx = self.f.start_x + (rng.normal(0, err_xy) if err_xy > 0 else 0.0)
             sy = self.f.start_y + (rng.normal(0, err_xy) if err_xy > 0 else 0.0)
             syaw = self.f.start_yaw + (rng.normal(0, err_yaw) if err_yaw > 0 else 0.0)
-        parked = [(10.0 + k, 10.0) for k in range(len(layout), self.f.count)]   # unused boxes stay out of the field
+        layout = [pose3(p) for p in layout]
+        parked = [(10.0 + k, 10.0, 0.0) for k in range(len(layout), self.f.count)]   # unused boxes stay out of the field
 
         self.pause()
         try:
-            for n, (x, y) in zip(self.names, layout + parked):
+            for n, (x, y, yaw) in zip(self.names, layout + parked):
                 # Gazebo tells its GUI about a moved model on ~/pose/info, throttled to 60 Hz: a pose
                 # published within 1/60 s of the previous one (the robot's while running, or the box
                 # before) is dropped, and a static box is never re-sent, so gzclient kept drawing 2-3
                 # boxes where the previous layout had them (physics was right). Wait before every
                 # placement, also the first. Wall clock: simulation time is paused here.
                 time.sleep(GUI_POSE_SPACING)
-                self.place(n, x, y)
+                self.place(n, x, y, yaw)
             time.sleep(GUI_POSE_SPACING)
             self.place(ROBOT, sx, sy, syaw, 0.01)
         finally:
@@ -137,9 +139,10 @@ class FieldManager:
 
         pa = PoseArray()
         pa.header.stamp, pa.header.frame_id = rospy.Time.now(), 'field'
-        for x, y in layout:
+        for x, y, yaw in layout:
             p = Pose()
-            p.position.x, p.position.y, p.orientation.w = x, y, 1.0
+            p.position.x, p.position.y = x, y
+            p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = yaw_quat(yaw)
             pa.poses.append(p)
         self.layout_pub.publish(pa)
         ev = Header()
@@ -150,7 +153,7 @@ class FieldManager:
         res = ResetFieldResponse()
         res.success, res.seed, res.attempts = True, seed, attempts
         res.start = Pose2D(sx, sy, syaw)
-        res.obstacles = [Pose2D(x, y, 0.0) for x, y in layout]
+        res.obstacles = [Pose2D(x, y, yaw) for x, y, yaw in layout]
         bad = layout_violations(layout, self.f)
         cs = ConfigSpace(self.f, self.footprint)
         ok = cs.reachable(layout, (sx, sy))

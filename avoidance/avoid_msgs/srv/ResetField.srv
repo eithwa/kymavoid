@@ -2,10 +2,11 @@
 int32 seed                    # < 0: pick a random seed; the seed used is returned. Also seeds the
                               # simulated odometry / camera noise, so a seed reproduces a run.
 string layout                 # "random" (default when empty, gap spec) | "route" (no gap spec, one route
-                              # >= /obstacles/route_width) | "classic" (original world layout)
+                              # >= /obstacles/route_width, boxes turned if /obstacles/route_rotate)
+                              # | "classic" (original world layout)
 float64 start_error_xy        # stddev of the start placement error [m] (0 = exact)
 float64 start_error_yaw       # stddev of the start heading error [rad] (0 = exact)
-geometry_msgs/Pose2D[] use_obstacles   # optional: these obstacle centres (a recorded case) instead of a layout
+geometry_msgs/Pose2D[] use_obstacles   # optional: these obstacle poses (a recorded case) instead of a layout
 geometry_msgs/Pose2D[] use_start       # optional: [start pose] instead of the spec start (+ start errors)
 ---
 bool success
@@ -13,4 +14,4 @@ string message
 int32 seed
 int32 attempts                # rejected layouts before this one (spec or reachability)
 geometry_msgs/Pose2D start
-geometry_msgs/Pose2D[] obstacles
+geometry_msgs/Pose2D[] obstacles     # centres and yaw [rad]

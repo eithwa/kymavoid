@@ -67,7 +67,7 @@ class VirtualCamera:
 
     def on_layout(self, msg):
         with self.lock:
-            self.obstacles = [(q.position.x, q.position.y) for q in msg.poses]
+            self.obstacles = [(q.position.x, q.position.y, yaw_of(q.orientation)) for q in msg.poses]
             self.history.clear()                                        # the robot was teleported
         while not self.due.empty():                                     # scans of the old field
             try:

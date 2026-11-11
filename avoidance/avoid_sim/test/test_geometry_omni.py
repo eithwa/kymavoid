@@ -3,6 +3,7 @@
 
 Run: python3 -m unittest discover -s avoidance/avoid_sim/test -v   (with the workspace sourced)
 """
+import dataclasses
 import math
 import os
 import unittest
@@ -11,6 +12,7 @@ import numpy as np
 import rospkg
 import yaml
 
+from avoid_sim import cases
 from avoid_sim.geometry import (CLASSIC_LAYOUT, ConfigSpace, Field, layout_violations, load_footprint,
                                 pair_gap, sample_layout, sample_layout_route)
 from avoid_sim.omni import NO_HIT, MaskRenderer, OmniModel, Scanner
@@ -50,9 +52,46 @@ class GeometryTest(unittest.TestCase):
             self.assertTrue(cs.reachable(layout), 'seed %d' % seed)
             for i in range(len(layout)):                                    # touching is fine, overlapping is not
                 for j in range(i + 1, len(layout)):
-                    self.assertGreaterEqual(pair_gap(layout[i], layout[j], FIELD.size, 'axis'), 0.0)
+                    self.assertGreaterEqual(pair_gap(layout[i], layout[j], FIELD.size, 'axis', FIELD), 0.0)
             with_violations += bool(layout_violations(layout, FIELD))
         self.assertGreater(with_violations, 10)                              # boxes closer than the spec: the point
+
+    def test_route_layouts_turn_the_boxes(self):
+        self.assertTrue(FIELD.route_rotate)                                  # field.yaml default
+        yaws = []
+        for seed in range(20):
+            layout, _ = sample_layout_route(FIELD, FOOT, np.random.default_rng(seed))
+            for x, y, yaw in layout:
+                yaws.append(math.degrees(yaw))
+                corners = FIELD.obstacle_corners(x, y, yaw)                  # inside the lines (may touch them)
+                self.assertLessEqual(np.abs(corners[:, 1]).max(), FIELD.red_inner + 1e-9, 'seed %d' % seed)
+        self.assertTrue(all(0 <= a < 90 for a in yaws))
+        self.assertGreater(sum(15 < a < 75 for a in yaws), len(yaws) / 2)   # mostly well turned
+
+    def test_route_rotate_off_gives_the_old_layouts(self):
+        # the first box of seed 42519 as the sampler placed it before boxes could turn
+        f = dataclasses.replace(FIELD, route_rotate=False)
+        layout, _ = sample_layout_route(f, FOOT, np.random.default_rng(42519))
+        self.assertTrue(all(yaw == 0 for _, _, yaw in layout))
+        self.assertAlmostEqual(layout[0][0], 2.0893, places=4)
+        self.assertAlmostEqual(layout[0][1], -1.0018, places=4)
+
+    def test_turned_box_occupancy_and_gap(self):
+        cs = ConfigSpace(FIELD, FOOT)
+        occ = cs.occupancy([(0.0, 0.0, math.pi / 4)])
+        inner = np.abs(cs.y0 + np.arange(cs.ny) * cs.res) < FIELD.red_inner
+        self.assertAlmostEqual(occ[inner].sum() * cs.res ** 2, FIELD.size ** 2, delta=0.02 * FIELD.size ** 2)
+        e = FIELD.size / math.sqrt(2)                                        # a diamond: corners 0.318 m out
+        self.assertEqual(occ[cs.cell(e - 0.01, 0.0)], 1)
+        self.assertEqual(occ[cs.cell(0.2, 0.2)], 0)                          # inside the axis-aligned box only
+        # its corner 5 cm from an axis-aligned box's face
+        q = (e + FIELD.size / 2 + 0.05, 0.0)
+        self.assertAlmostEqual(pair_gap((0.0, 0.0, math.pi / 4), q, FIELD.size, 'axis', FIELD), 0.05, places=6)
+        self.assertLess(pair_gap((0.0, 0.0, math.pi / 4), (q[0] - 0.08, 0.0), FIELD.size, 'axis', FIELD), 0)
+
+    def test_cases_store_the_yaw_of_turned_boxes(self):
+        c = cases.make(1, 'route', (-2.0, 0.0, 0.0), [(0.5, 0.2, math.radians(30)), (1.0, -0.3, 0.0), (1.5, 0.0)], 'camera')
+        self.assertEqual(c['obstacles'], [[0.5, 0.2, 30.0], [1.0, -0.3], [1.5, 0.0]])
 
     def test_route_width(self):
         # a wall of boxes across the corridor with one gap: a disc of route_width must fit through it
@@ -109,6 +148,27 @@ class OmniTest(unittest.TestCase):
         black, _ = self.scan_one(self.m0, 0.0, 0.0, 0.0, [(1.0 + FIELD.size / 2, 0.0)])
         self.assertAlmostEqual(black[0], 100, delta=3)                      # line 0 = front
         self.assertGreater(black[60], 150)                                   # behind: nothing that close
+
+    def test_turned_box_seen_at_its_corner(self):
+        # a box turned by 45 deg points a corner at the robot: 0.318 m from its centre, not 0.225
+        x = 1.0 + FIELD.size / math.sqrt(2)
+        black, _ = self.scan_one(self.m0, 0.0, 0.0, 0.0, [(x, 0.0, math.pi / 4)])
+        self.assertAlmostEqual(black[0], 100, delta=3)
+        black, _ = self.scan_one(self.m0, 0.0, 0.0, 0.0, [(x, 0.0)])
+        self.assertAlmostEqual(black[0], 100 + 100 * (FIELD.size / math.sqrt(2) - FIELD.size / 2), delta=3)
+
+    def test_ray_squares(self):
+        rng = np.random.default_rng(1)
+        a = rng.uniform(-math.pi, math.pi, 500)
+        ux, uy = np.cos(a), np.sin(a)
+        centres = [(1.0, 0.3), (-0.7, -0.5), (0.2, 1.1)]
+        t0, _ = MaskRenderer._ray_boxes(0.1, -0.05, ux, uy, [FIELD.obstacle_box(*c) for c in centres])
+        t1, _ = MaskRenderer._ray_squares(0.1, -0.05, ux, uy, centres, FIELD.size / 2)
+        self.assertTrue(np.allclose(np.where(np.isinf(t0), -1, t0), np.where(np.isinf(t1), -1, t1)))
+        # towards (1, 0.3): past the corner of the axis-aligned box at (1, 0), into the turned one
+        u = np.array([1.0]) / math.hypot(1.0, 0.3), np.array([0.3]) / math.hypot(1.0, 0.3)
+        self.assertTrue(np.isinf(MaskRenderer._ray_squares(0.0, 0.0, *u, [(1.0, 0.0)], FIELD.size / 2)[0][0, 0]))
+        self.assertTrue(np.isfinite(MaskRenderer._ray_squares(0.0, 0.0, *u, [(1.0, 0.0, math.pi / 4)], FIELD.size / 2)[0][0, 0]))
 
     def test_index_direction_is_counter_clockwise(self):
         # obstacle on the robot's left (+y): scan line 30 (= +90 deg)
