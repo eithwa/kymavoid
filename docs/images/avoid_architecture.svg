@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="452" viewBox="0 0 1080 452">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker></defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="20" y="40" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="13" font-weight="bold" fill="#3c6aa8" text-anchor="start">感測器（二選一）</text>
+<rect x="20" y="60" width="100" height="56" rx="10" fill="#eaf2fb" stroke="#5b8bd0" stroke-width="1.6"/>
+<text x="70" y="93" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">雷射 ×3</text>
+<rect x="20" y="150" width="100" height="56" rx="10" fill="#eaf2fb" stroke="#5b8bd0" stroke-width="1.6"/>
+<text x="70" y="183" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">攝影機</text>
+<rect x="145" y="60" width="150" height="56" rx="10" fill="#eaf2fb" stroke="#5b8bd0" stroke-width="1.6"/>
+<text x="220" y="93" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">lidar_adapter</text>
+<rect x="145" y="150" width="150" height="56" rx="10" fill="#eaf2fb" stroke="#5b8bd0" stroke-width="1.6"/>
+<text x="220" y="183" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">camera_adapter</text>
+<path d="M120,88 L145,88" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<path d="M120,178 L145,178" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<rect x="400" y="24" width="400" height="272" rx="10" fill="#eef6ea" stroke="#5c9a4a" stroke-width="1.6"/>
+<text x="418" y="54" font-family="'DejaVu Sans Mono',monospace" font-size="18" font-weight="bold" fill="#2f6b1f" text-anchor="start">nav_node</text>
+<rect x="425" y="74" width="165" height="70" rx="10" fill="#ffffff" stroke="#7fb36d" stroke-width="1.6"/>
+<text x="507.5" y="106" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">障礙物地圖</text>
+<text x="507.5" y="126" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">格子地圖</text>
+<rect x="610" y="74" width="165" height="70" rx="10" fill="#ffffff" stroke="#7fb36d" stroke-width="1.6"/>
+<text x="692.5" y="106" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">規劃</text>
+<text x="692.5" y="126" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">A*，10 Hz</text>
+<rect x="425" y="174" width="165" height="70" rx="10" fill="#ffffff" stroke="#7fb36d" stroke-width="1.6"/>
+<text x="507.5" y="206" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">定位</text>
+<text x="507.5" y="226" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">EKF</text>
+<rect x="610" y="174" width="165" height="70" rx="10" fill="#ffffff" stroke="#7fb36d" stroke-width="1.6"/>
+<text x="692.5" y="206" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">控制</text>
+<text x="692.5" y="226" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">循跡、限速、安全層</text>
+<path d="M590,109 L610,109" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<path d="M692.5,144 L692.5,174" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<path d="M590,209 L610,209" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<path d="M590,188 L610,130" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="600" y="274" font-family="'DejaVu Sans Mono',monospace" font-size="12" fill="#4a6b3a" text-anchor="middle">IDLE → RUNNING → FINISHED　／　SAFE_STOP</text>
+<path d="M295,88 L400,88" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="347" y="80" font-family="'DejaVu Sans Mono',monospace" font-size="12" fill="#444" text-anchor="middle">/scan</text>
+<path d="M295,178 L400,178" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="347" y="170" font-family="'DejaVu Sans Mono',monospace" font-size="12" fill="#444" text-anchor="middle">/scan</text>
+<text x="347" y="196" font-family="'DejaVu Sans Mono',monospace" font-size="12" fill="#444" text-anchor="middle">/boundary</text>
+<rect x="880" y="60" width="180" height="64" rx="10" fill="#fdf1e4" stroke="#d08a3c" stroke-width="1.6"/>
+<text x="970" y="89" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">motion_adapter</text>
+<text x="970" y="109" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">實車底盤</text>
+<path d="M800,80 L880,80" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="840" y="72" font-family="'DejaVu Sans Mono',monospace" font-size="12" fill="#444" text-anchor="middle">/cmd_vel</text>
+<path d="M880,106 L800,106" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="840" y="124" font-family="'DejaVu Sans Mono',monospace" font-size="12" fill="#444" text-anchor="middle">/odom /imu</text>
+<rect x="880" y="200" width="180" height="64" rx="10" fill="#fdf1e4" stroke="#d08a3c" stroke-width="1.6"/>
+<text x="970" y="229" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="15" font-weight="bold" fill="#222" text-anchor="middle">網頁</text>
+<text x="970" y="249" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">rosbridge</text>
+<path d="M800,232 L880,232" fill="none" stroke="#555" stroke-width="1.8" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="840" y="224" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#444" text-anchor="middle">狀態／指令</text>
+<rect x="20" y="324" width="1040" height="112" rx="10" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="40" y="352" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="14" font-weight="bold" fill="#555" text-anchor="start">模擬（avoid_sim）：取代實車的感測器和底盤，nav_node 不用改</text>
+<rect x="40" y="366" width="186" height="56" rx="10" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.6"/>
+<text x="133" y="391" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">Gazebo</text>
+<text x="133" y="411" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">場地、雷射、底盤</text>
+<rect x="242" y="366" width="186" height="56" rx="10" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.6"/>
+<text x="335" y="391" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">virtual_camera</text>
+<text x="335" y="411" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">模擬攝影機</text>
+<rect x="444" y="366" width="186" height="56" rx="10" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.6"/>
+<text x="537" y="391" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">odom_noise</text>
+<text x="537" y="411" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">里程計誤差</text>
+<rect x="646" y="366" width="186" height="56" rx="10" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.6"/>
+<text x="739" y="391" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">field_manager</text>
+<text x="739" y="411" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">擺場地</text>
+<rect x="848" y="366" width="186" height="56" rx="10" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.6"/>
+<text x="941" y="391" font-family="'DejaVu Sans Mono',monospace" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">evaluate.py</text>
+<text x="941" y="411" font-family="'Noto Sans CJK TC','Noto Sans CJK JP','Droid Sans Fallback',sans-serif" font-size="12" fill="#666" text-anchor="middle">批次評估</text>
+</svg>
